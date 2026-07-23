@@ -27,6 +27,9 @@ $ErrorActionPreference = 'Stop'
 # update = sync 별칭 (원본과 동일한지 해시 비교 후 다른 파일만 반영)
 if ($Action -eq 'update') { $Action = 'sync' }
 
+# powershell -File 로 호출하면 "-Exclude a,b"가 배열로 분리되지 않고 문자열 하나로 들어온다 → 콤마 분리
+$Exclude = @($Exclude | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 if ([string]::IsNullOrEmpty($env:GLOBALIZE_ROOT)) { $GlobalRoot = Join-Path $env:USERPROFILE '.claude\skills' }
 else                                              { $GlobalRoot = $env:GLOBALIZE_ROOT }   # 테스트용 재정의
 $SidecarName = '.globalize.json'
@@ -79,7 +82,7 @@ function Sync-One([string]$Dst) {
     $side = Read-Sidecar $Dst
     if ($null -eq $side) { throw "'$Dst'에 사이드카($SidecarName)가 없습니다. globalize로 등록된 스킬이 아닙니다." }
     $origin = [string]$side.origin
-    $ex = @($side.exclude)
+    $ex = @(@($side.exclude) | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $skillName = Split-Path $Dst -Leaf
     if (-not (Test-Path $origin)) {
         Write-Output "!! '$skillName': 원본($origin)이 없습니다. 프로젝트가 이동/삭제되었으면 'add <새 경로>'로 다시 등록하세요."
@@ -125,6 +128,13 @@ function Sync-One([string]$Dst) {
     Write-Output "'$skillName' 동기화 완료: 복사 $($copied.Count)개, 삭제 $($removed.Count)개"
     foreach ($r in $copied)  { Write-Output "  + $r" }
     foreach ($r in $removed) { Write-Output "  - $r" }
+
+    # 안전망: 자격증명으로 의심되는 파일이 복사되었으면 경고 (제외 목록 누락 방지)
+    $suspect = @($copied | Where-Object { $_ -match '(?i)(credential|secret|token|\.env$|password)' })
+    if ($suspect.Count -gt 0) {
+        Write-Output "!! 경고: 자격증명으로 의심되는 파일이 전역으로 복사되었습니다. 의도한 것이 아니면 -Exclude로 제외 후 다시 등록하세요:"
+        foreach ($r in $suspect) { Write-Output "   $r" }
+    }
 }
 
 # 전역 스킬 폴더에서 globalize 관리 대상(사이드카 보유) 목록
@@ -146,7 +156,7 @@ switch ($Action) {
                 continue
             }
             $origin = [string]$side.origin
-            $ex = @($side.exclude)
+            $ex = @(@($side.exclude) | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
             $status = '동기화됨'
             if (-not (Test-Path $origin)) {
                 $status = '!! 원본 없음'

@@ -7,8 +7,8 @@ argument-hint: list | export <이름> | import <이름> | add <파일경로> <�
 # Claude 계정 자격증명 전환 (cred)
 
 `~/.claude/.credentials.json`(Claude Code 로그인 토큰)을 프로필 단위로 관리한다.
-프로필 저장소는 `E:\dev\accredential\.claude\skills\cred\profiles\` 이며, 이 스킬이 어디에 설치되어 있든(프로젝트 사본/전역 사본) 항상 이 저장소 하나만 사용한다 (`CRED_STORE` 환경변수로 재정의 가능).
-스크립트는 실행될 때마다 스킬 본체(SKILL.md, scripts, .gitignore — profiles 데이터 제외)를 전역 스킬 위치 `~/.claude/skills/cred/`에 자가 설치/동기화한다. 덕분에 어떤 프로젝트에서든 새 세션부터 /cred를 쓸 수 있다.
+프로필 저장소는 `E:\dev\accredential\.claude\skills\cred\profiles\` 이며, 이 스킬이 어디에 설치되어 있든(프로젝트 원본/전역 복사본) 항상 이 저장소 하나만 사용한다 (`CRED_STORE` 환경변수로 재정의 가능).
+전역 복사본(`~/.claude/skills/cred/`)은 globalize 스킬이 관리한다 — 원본 수정 후에는 `/globalize update cred`로 동기화한다.
 
 모든 실제 작업은 이 스킬 폴더의 `scripts/cred.ps1` 스크립트가 수행한다. credentials 파일을 직접 읽거나 수정하지 말 것.
 

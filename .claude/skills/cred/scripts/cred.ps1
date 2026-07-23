@@ -32,7 +32,7 @@ if ([string]::IsNullOrEmpty($env:CRED_FILE))   { $CredFile   = Join-Path $env:US
 else                                           { $CredFile   = $env:CRED_FILE }
 if ([string]::IsNullOrEmpty($env:CRED_CONFIG)) { $ConfigFile = Join-Path $env:USERPROFILE '.claude.json' }
 else                                           { $ConfigFile = $env:CRED_CONFIG }
-# 전역 스킬 위치: 어떤 프로젝트에서든 /cred를 쓸 수 있도록 스킬 본체를 여기에 자가 설치한다.
+# 전역 스킬 위치 (전역 복사본은 globalize 스킬이 동기화한다. 구버전 저장소 이전 경로 계산에만 사용)
 $GlobalSkillDir = Join-Path $env:USERPROFILE '.claude\skills\cred'
 # 프로필 저장소(vault): accredential 프로젝트의 스킬 폴더 안 profiles.
 # 어느 사본(프로젝트/전역)으로 실행하든 항상 이 저장소 하나만 사용한다. CRED_STORE 환경변수로 재정의 가능.
@@ -173,35 +173,6 @@ function Update-EmailMarker([string]$ProfileName) {
     }
 }
 
-# 스킬 자가 설치/동기화: 전역 위치가 아닌 곳(프로젝트 사본 등)에서 실행 중이면
-# SKILL.md와 scripts를 전역 위치로 복사한다. profiles(데이터)는 복사 대상이 아니다.
-function Install-GlobalSkill {
-    $srcSkill = [System.IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
-    $dstSkill = [System.IO.Path]::GetFullPath($GlobalSkillDir)
-    if ($srcSkill -ieq $dstSkill) { return }   # 이미 전역 위치에서 실행 중
-    $copied = $false
-    if (-not (Test-Path $dstSkill)) { New-Item -ItemType Directory -Path $dstSkill -Force | Out-Null }
-    foreach ($rel in @('SKILL.md', '.gitignore')) {
-        $s = Join-Path $srcSkill $rel
-        $d = Join-Path $dstSkill $rel
-        if ((Test-Path $s) -and (-not (Test-Path $d) -or (Get-FileHash $s).Hash -ne (Get-FileHash $d).Hash)) {
-            Copy-Item $s $d -Force; $copied = $true
-        }
-    }
-    $srcScripts = Join-Path $srcSkill 'scripts'
-    $dstScripts = Join-Path $dstSkill 'scripts'
-    if (Test-Path $srcScripts) {
-        if (-not (Test-Path $dstScripts)) { New-Item -ItemType Directory -Path $dstScripts -Force | Out-Null }
-        foreach ($f in Get-ChildItem $srcScripts -File) {
-            $d = Join-Path $dstScripts $f.Name
-            if (-not (Test-Path $d) -or (Get-FileHash $f.FullName).Hash -ne (Get-FileHash $d).Hash) {
-                Copy-Item $f.FullName $d -Force; $copied = $true
-            }
-        }
-    }
-    if ($copied) { Write-Output "(스킬을 전역 위치에 동기화했습니다: $dstSkill - 새 세션부터 어떤 프로젝트에서든 /cred 사용 가능)" }
-}
-
 # 구버전 flat 구조(<이름>.json / <이름>.account.json)를 폴더 구조로 자동 이전
 function Invoke-StoreMigration {
     # 구버전 저장소 위치에 남은 프로필/백업을 새 저장소로 이전
@@ -333,7 +304,6 @@ function Restore-AccountToConfig($Sidecar) {
     Write-Output "화면 표시 계정 정보를 '$($Sidecar.email)'(으)로 복원했습니다."
 }
 
-Install-GlobalSkill
 Invoke-StoreMigration
 
 switch ($Action) {
