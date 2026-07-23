@@ -1,0 +1,7 @@
+# 자격증명 파일은 절대 커밋 금지
+credentials.json
+*.credentials.json
+.credentials.json
+profiles/
+
+.claude/settings.local.json
