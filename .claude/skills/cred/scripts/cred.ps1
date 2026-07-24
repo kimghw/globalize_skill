@@ -304,6 +304,45 @@ function Restore-AccountToConfig($Sidecar) {
     Write-Output "화면 표시 계정 정보를 '$($Sidecar.email)'(으)로 복원했습니다."
 }
 
+# import 전 자동 동기화: 현재 활성 토큰을 그 계정의 프로필에 저장해 스냅샷을 최신으로 유지한다.
+# refresh 토큰은 갱신 시마다 회전(구버전 무효화)되므로, 마지막 사용 시점의 토큰을
+# 프로필에 보관해둬야 다음에 그 계정으로 돌아올 때 재로그인이 필요 없다.
+function Sync-ActiveToProfile {
+    if (-not (Test-Path $CredFile) -or -not (Test-CredStructure $CredFile)) { return }
+    $cachedAcctJson = Get-CachedAccountJson
+    $cachedEmail = $null
+    if ($cachedAcctJson) { $cachedEmail = [CredJson]::GetString($cachedAcctJson, 'emailAddress') }
+    if ([string]::IsNullOrEmpty($cachedEmail)) {
+        Write-Output "(자동 동기화 건너뜀: 화면 표시 계정 캐시가 없어 현재 토큰이 어느 프로필인지 알 수 없습니다.)"
+        return
+    }
+    $found = @()
+    foreach ($p in @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -notlike '_backup*' })) {
+        $side = Read-Sidecar $p.Name
+        if ($null -ne $side -and $side.email -eq $cachedEmail) { $found += $p.Name }
+    }
+    if ($found.Count -eq 0) {
+        Write-Output "(자동 동기화 건너뜀: 현재 계정($cachedEmail)에 해당하는 프로필이 없습니다. 'export <이름>'으로 저장해두면 다음 전환 때 재로그인이 줄어듭니다.)"
+        return
+    }
+    if ($found.Count -gt 1) {
+        Write-Output "(자동 동기화 건너뜀: 계정 $cachedEmail 이 여러 프로필($($found -join ', '))에 기록되어 있어 대상을 정할 수 없습니다.)"
+        return
+    }
+    $syncName = $found[0]
+    $dest = Get-ProfileCredPath $syncName
+    if ((Test-Path $dest) -and (Get-Sha $dest) -eq (Get-Sha $CredFile)) { return }   # 이미 최신
+    if (Test-Path $dest) {
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        Copy-Item $dest (Join-Path $BackupDir "$stamp-autosync-$syncName.json") -Force
+    }
+    $destDir = Get-ProfileDir $syncName
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Copy-Item $CredFile $dest -Force
+    Write-Output "자동 동기화: 현재 토큰(계정 $cachedEmail)을 프로필 '$syncName'에 저장했습니다 (이전 토큰은 _backups에 백업)."
+}
+
 Invoke-StoreMigration
 
 switch ($Action) {
@@ -427,6 +466,9 @@ switch ($Action) {
             else { throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)" }
         }
         if (-not (Test-CredStructure $src)) { throw "'$src' 파일이 올바른 credentials 형식이 아닙니다." }
+
+        # 교체 전에 현재 토큰을 그 계정의 프로필에 자동 저장 (refresh 토큰 회전 대비)
+        Sync-ActiveToProfile
 
         $alreadyActive = $false
         if ((Test-Path $CredFile) -and (Test-CredStructure $CredFile)) {
