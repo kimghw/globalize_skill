@@ -7,7 +7,7 @@
 #   export <이름> [폴더]   프로필 → 이동용 패키지(zip) 추출 (다른 PC로 가져가기)
 #   import <파일> [이름]   패키지(zip)/폴더/credentials 파일 → 프로필 등록 (add는 별칭)
 #
-# 프로필 구조:  <이름>\credentials.json - .credentials.json 사본 (토큰, 계정정보 없음)
+# 프로필 구조:  <이름>\credentials.json - .credentials.json 사본 (토큰 포함, 계정 식별정보는 없음)
 #               <이름>\account.json     - 계정(로그인) 정보: 이메일/조직, 토큰 없음
 #               <이름>\<이메일>          - 계정 표시용 빈 마커 파일 (탐색기에서 한눈에 확인용, 자동 관리)
 # 구버전 flat 파일(<이름>.json / <이름>.account.json)은 실행 시 자동으로 폴더 구조로 이전된다.
@@ -150,6 +150,7 @@ function Assert-ValidName([string]$n) {
         throw "프로필 이름은 영문/숫자/._- 만 사용할 수 있습니다: '$n'"
     }
     if ($n -like '_*') { throw "'_'로 시작하는 이름은 예약되어 있습니다 (_backups, _exports 등 내부용)." }
+    if ($n -match '^\.+$') { throw "'.'만으로 된 이름은 사용할 수 없습니다: '$n'" }
 }
 
 function Backup-Current([string]$Reason) {
@@ -310,7 +311,7 @@ function Restore-AccountToConfig($Sidecar) {
     Write-Output "화면 표시 계정 정보를 '$($Sidecar.email)'(으)로 복원했습니다."
 }
 
-# import 전 자동 동기화: 현재 활성 토큰을 그 계정의 프로필에 저장해 스냅샷을 최신으로 유지한다.
+# use/export 전 자동 동기화: 현재 활성 토큰을 그 계정의 프로필에 저장해 스냅샷을 최신으로 유지한다.
 # refresh 토큰은 갱신 시마다 회전(구버전 무효화)되므로, 마지막 사용 시점의 토큰을
 # 프로필에 보관해둬야 다음에 그 계정으로 돌아올 때 재로그인이 필요 없다.
 function Sync-ActiveToProfile {
@@ -440,8 +441,18 @@ switch ($Action) {
         if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
         Copy-Item $CredFile $dest -Force
         $email = Save-AccountFromCache $Name
-        $acctMsg = "계정 정보 캐시가 없어 이메일은 기록하지 못했습니다 (setaccount로 수동 등록 가능)."
-        if ($email) { $acctMsg = "계정: $email" }
+        if ($email) {
+            $acctMsg = "계정: $email"
+        } else {
+            $acctMsg = "계정 정보 캐시가 없어 이메일은 기록하지 못했습니다 ('fixcache $Name' 또는 setaccount로 등록 가능)."
+            # 캐시가 없는데 옛 계정 기록이 남으면 새 토큰과 신원이 어긋난 채 자동 동기화 대상이 되므로 제거한다
+            $stale = Get-SidecarPath $Name
+            if (Test-Path $stale) {
+                Remove-Item $stale -Force
+                Update-EmailMarker $Name
+                $acctMsg += " 기존 계정 기록은 새 토큰과 어긋날 수 있어 제거했습니다."
+            }
+        }
         Write-Output ("프로필 '$Name' 저장 완료  -  $acctMsg  -  " + (Get-CredMeta $dest))
         Write-Output "(계정 정보는 화면에 표시 중인 캐시 기준입니다. 방금 이 계정으로 로그인한 상태가 아니라면 setaccount로 확인/수정하세요.)"
     }
@@ -449,11 +460,12 @@ switch ($Action) {
     'use' {
         # use <이름> : 프로필로 계정 전환 (구 import)
         if ([string]::IsNullOrEmpty($Name)) { throw "전환할 프로필 이름을 지정하세요. (list로 확인)" }
-        $src = Get-ProfileCredPath $Name
-        if (-not (Test-Path $src)) {
+        try { Assert-ValidName $Name } catch {
             if (Test-Path $Name) { throw "use는 저장된 프로필만 전환합니다. 외부 파일/패키지는 먼저 'import $Name <이름>'으로 등록한 뒤 use 하세요." }
-            throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)"
+            throw
         }
+        $src = Get-ProfileCredPath $Name
+        if (-not (Test-Path $src)) { throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)" }
         if (-not (Test-CredStructure $src)) { throw "'$src' 파일이 올바른 credentials 형식이 아닙니다." }
 
         # 교체 전에 현재 토큰을 그 계정의 프로필에 자동 저장 (refresh 토큰 회전 대비)
@@ -508,10 +520,10 @@ switch ($Action) {
 
         $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
         $man = New-Object 'System.Collections.Generic.Dictionary[string,object]'
-        $man['format']     = 'cred-package/1'
-        $man['name']       = $Name
-        $man['email']      = $emailTag
-        $man['exportedAt'] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        $man['format']     = [string]'cred-package/1'
+        $man['name']       = [string]$Name
+        $man['email']      = [string]$emailTag
+        $man['exportedAt'] = [string](Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
         $tmpDir = Join-Path $env:TEMP ("cred-export-" + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
@@ -586,6 +598,10 @@ switch ($Action) {
                 Update-EmailMarker $newName
                 $side = Read-Sidecar $newName
                 if ($null -ne $side -and $side.email) { $acctMsg = "계정: $($side.email)" }
+            } else {
+                # 덮어쓰기인데 새 입력에 계정 정보가 없으면, 옛 계정 기록이 새 토큰과 어긋난 채 남지 않도록 제거한다
+                $stale = Get-SidecarPath $newName
+                if (Test-Path $stale) { Remove-Item $stale -Force; Update-EmailMarker $newName }
             }
             Write-Output ("프로필 '$newName' 등록 완료  -  " + (Get-CredMeta $dest))
             if ($acctMsg) {

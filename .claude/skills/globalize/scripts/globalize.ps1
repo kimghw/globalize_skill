@@ -69,7 +69,7 @@ function Get-Sha([string]$Path) { (Get-FileHash $Path -Algorithm SHA256).Hash }
 function Read-Sidecar([string]$Dir) {
     $p = Join-Path $Dir $SidecarName
     if (-not (Test-Path $p)) { return $null }
-    try { return Get-Content $p -Raw | ConvertFrom-Json } catch { return $null }
+    try { return [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { return $null }
 }
 
 # 원본이 git 저장소 안이면 원격 URL과 저장소 루트 기준 상대경로를 얻는다 (이전/clone 안내용)
@@ -349,8 +349,14 @@ switch ($Action) {
         if ($null -ne $existing -and [string]$existing.origin -ne $src) {
             Write-Output "기존 원본($($existing.origin)) → 새 원본($src)으로 변경합니다."
         }
+        # -Exclude를 명시하지 않고 재등록하면 기존 제외 목록을 유지한다 (자격증명 폴더 보호가 풀리는 사고 방지)
+        $effEx = $Exclude
+        if (-not $PSBoundParameters.ContainsKey('Exclude') -and $null -ne $existing) {
+            $effEx = @(@($existing.exclude) | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($effEx.Count -gt 0) { Write-Output "(기존 제외 목록 유지: $($effEx -join ', ') — 바꾸려면 -Exclude를 명시하세요)" }
+        }
         if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
-        Write-Sidecar $dst $skillName $src $Exclude
+        Write-Sidecar $dst $skillName $src $effEx
         Sync-One $dst
         $null = Sync-Registry
         Write-Output "'$skillName' 전역 등록 완료: $dst"
@@ -396,7 +402,7 @@ switch ($Action) {
         $regPath = $Target
         if ([string]::IsNullOrEmpty($regPath)) { $regPath = Join-Path (Split-Path $PSScriptRoot -Parent) $RegistryName }
         if (-not (Test-Path $regPath)) { throw "레지스트리 파일이 없습니다: $regPath ('add'로 스킬을 등록하면 자동 생성됩니다)" }
-        $reg = Get-Content $regPath -Raw | ConvertFrom-Json
+        $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json
         $entries = @($reg.skills)
         if ($entries.Count -eq 0) { Write-Output "레지스트리에 등록된 스킬이 없습니다."; break }
         foreach ($e in $entries) {
@@ -445,7 +451,7 @@ switch ($Action) {
         if ($null -ne $env:GLOBALIZE_SETTINGS) { $settingsPath = $env:GLOBALIZE_SETTINGS }   # 테스트용 재정의
 
         $settings = $null
-        if (Test-Path $settingsPath) { $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json }
+        if (Test-Path $settingsPath) { $settings = [System.IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json }
         if ($null -eq $settings) { $settings = [pscustomobject]@{} }
 
         $newHook = [pscustomobject]@{

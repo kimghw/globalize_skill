@@ -1,7 +1,7 @@
 ---
 name: git
 description: git 작업 자동화. 인자 없으면 stage+commit+push(변경 없으면 pull), 'pull'이면 pull, 'revert'면 미커밋 변경 전체 취소, 'public|private'이면 원격 저장소 공개여부 변경, 그 외 인자는 git 서브커맨드로 그대로 실행. 커밋/푸시/풀/변경 취소/레포 공개설정 요청 시 사용.
-argument-hint: (없음: commit+push) | pull | revert | public | private | help | <git 서브커맨드>
+argument-hint: "(없음: commit+push) | pull | revert | public | private | help | <git 서브커맨드>"
 ---
 
 # git 작업 자동화 (git)

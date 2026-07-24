@@ -1,7 +1,7 @@
 ---
 name: globalize
 description: 프로젝트에 있는 스킬(.claude/skills/<이름>)을 전역(~/.claude/skills)에 복사·등록해 어떤 프로젝트에서든 쓸 수 있게 한다. 스킬 전역화/전역 등록, 원본 수정 후 재동기화(sync), 전역 스킬 현황 확인(원본 프로젝트 git 상태 포함), 전역 복사본 제거, 새 PC로 전역 스킬 이전/복원(restore), 세션 시작 자동 동기화 훅 설치 요청 시 사용.
-argument-hint: (없음: 관리 흐름) | list | add <스킬경로|이름> [-Exclude a,b] | sync|update [이름] | remove <이름> | restore [레지스트리경로] | install-hook
+argument-hint: "(없음: 관리 흐름) | list | add <스킬경로|이름> [-Exclude a,b] | sync|update [이름] | remove <이름> | restore [레지스트리경로] | install-hook"
 ---
 
 # 프로젝트 스킬 전역화 (globalize)
