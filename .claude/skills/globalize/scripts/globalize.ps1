@@ -4,15 +4,20 @@
 #       전역 복사본 안의 .globalize.json 사이드카에 원본 경로/제외 목록을 기록해두고,
 #       sync 시 그 기록대로 원본 → 전역을 다시 복사(미러링)한다.
 #
-# 사이드카(.globalize.json): { name, origin, exclude, syncedAt }
+# 사이드카(.globalize.json): { name, origin, repo, repoPath, exclude, syncedAt }
 #  - 사이드카가 있는 전역 스킬만 이 도구의 관리 대상이다. 없는 전역 스킬은 건드리지 않는다.
+#  - repo/repoPath: 원본이 git 저장소 안에 있으면 원격 URL과 저장소 내 상대경로를 자동 기록
+#    (다른 PC로 이전할 때 clone 안내에 사용).
 #  - exclude 에 지정된 이름과 일치하는 경로 세그먼트(폴더/파일)는 복사하지 않고,
 #    전역 쪽에 이미 있어도 삭제하지 않는다 (데이터/자격증명 보호).
+#
+# 레지스트리(registry.json): 관리 대상 전체 목록. globalize "원본" 폴더에 기록되므로
+#   프로젝트 저장소에 커밋되어 다른 PC로 함께 이동한다. restore 가 이 파일로 복원한다.
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('list', 'add', 'sync', 'update', 'remove')]
+    [ValidateSet('list', 'add', 'sync', 'update', 'remove', 'autosync', 'restore', 'install-hook')]
     [string]$Action,
 
     [Parameter(Position = 1)]
@@ -33,6 +38,7 @@ $Exclude = @($Exclude | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.T
 if ([string]::IsNullOrEmpty($env:GLOBALIZE_ROOT)) { $GlobalRoot = Join-Path $env:USERPROFILE '.claude\skills' }
 else                                              { $GlobalRoot = $env:GLOBALIZE_ROOT }   # 테스트용 재정의
 $SidecarName = '.globalize.json'
+$RegistryName = 'registry.json'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 if (-not (Test-Path $GlobalRoot)) { New-Item -ItemType Directory -Path $GlobalRoot -Force | Out-Null }
@@ -66,10 +72,35 @@ function Read-Sidecar([string]$Dir) {
     try { return Get-Content $p -Raw | ConvertFrom-Json } catch { return $null }
 }
 
+# 원본이 git 저장소 안이면 원격 URL과 저장소 루트 기준 상대경로를 얻는다 (이전/clone 안내용)
+function Get-RepoInfo([string]$Path) {
+    $repo = ''; $repoPath = ''
+    if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path $Path)) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $top = git -C $Path rev-parse --show-toplevel 2>$null
+            if ($LASTEXITCODE -eq 0 -and $top) {
+                $url = git -C $Path config --get remote.origin.url 2>$null
+                if ($LASTEXITCODE -eq 0 -and $url) { $repo = ([string]$url).Trim() }
+                $topFull = [System.IO.Path]::GetFullPath((([string]$top).Trim() -replace '/', '\')).TrimEnd('\')
+                $pFull = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+                if ($pFull.Length -gt $topFull.Length) {
+                    $repoPath = $pFull.Substring($topFull.Length).TrimStart('\') -replace '\\', '/'
+                }
+            }
+        } finally { $ErrorActionPreference = $prevEap }
+    }
+    return @{ repo = $repo; repoPath = $repoPath }
+}
+
 function Write-Sidecar([string]$Dir, [string]$SkillName, [string]$Origin, [string[]]$Ex) {
+    $ri = Get-RepoInfo $Origin
     $obj = [ordered]@{
         name     = $SkillName
         origin   = $Origin
+        repo     = $ri.repo
+        repoPath = $ri.repoPath
         exclude  = @($Ex)
         syncedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
     }
@@ -143,6 +174,84 @@ function Get-LinkedSkills {
       Where-Object { Test-Path (Join-Path $_.FullName $SidecarName) })
 }
 
+# 레지스트리를 기록할 globalize "원본" 폴더 (전역 복사본은 sync 때 덮어써지므로 항상 원본에 쓴다)
+function Get-GlobalizeOrigin {
+    $side = Read-Sidecar (Join-Path $GlobalRoot 'globalize')
+    if ($null -ne $side -and (Test-Path ([string]$side.origin))) { return [string]$side.origin }
+    # 아직 전역화 전이면, 프로젝트 쪽에서 실행 중인 자기 자신의 스킬 폴더를 사용
+    $selfSkill = Split-Path $PSScriptRoot -Parent
+    $globalFull = [System.IO.Path]::GetFullPath($GlobalRoot).TrimEnd('\')
+    if (-not ([System.IO.Path]::GetFullPath($selfSkill)).StartsWith($globalFull, [System.StringComparison]::OrdinalIgnoreCase) -and
+        (Test-Path (Join-Path $selfSkill 'SKILL.md'))) { return $selfSkill }
+    return $null
+}
+
+# 관리 대상 전체 목록을 registry.json(globalize 원본)에 반영. 내용이 바뀌었으면 $true.
+function Update-Registry {
+    $originDir = Get-GlobalizeOrigin
+    if ($null -eq $originDir) { return $false }
+    $items = @()
+    foreach ($d in @(Get-LinkedSkills | Sort-Object Name)) {
+        $side = Read-Sidecar $d.FullName
+        if ($null -eq $side) { continue }
+        $items += [ordered]@{
+            name     = [string]$side.name
+            origin   = [string]$side.origin
+            repo     = [string]$side.repo
+            repoPath = [string]$side.repoPath
+            exclude  = @(@($side.exclude) | Where-Object { $_ })
+        }
+    }
+    $json = ConvertTo-Json ([ordered]@{ skills = $items }) -Depth 8
+    $regPath = Join-Path $originDir $RegistryName
+    $old = ''
+    if (Test-Path $regPath) { $old = [System.IO.File]::ReadAllText($regPath) }
+    if ($old -eq $json) { return $false }
+    [System.IO.File]::WriteAllText($regPath, $json, $Utf8NoBom)
+    return $true
+}
+
+# 레지스트리 갱신 후, 바뀌었으면 globalize 전역 복사본에도 즉시 반영 (restore 가 전역 복사본의 레지스트리를 읽으므로)
+function Sync-Registry {
+    $changed = Update-Registry
+    if ($changed) {
+        $g = Join-Path $GlobalRoot 'globalize'
+        if (Test-Path (Join-Path $g $SidecarName)) { $null = Sync-One $g }
+    }
+    return $changed
+}
+
+# PC에서 .claude\skills\<이름> 폴더 검색 (restore 용, 원본 경로가 사라졌을 때)
+# 기본: 모든 고정 드라이브의 최상위 폴더(시스템 폴더 제외)에서 3단계 깊이까지.
+# GLOBALIZE_SEARCH_ROOTS 환경변수(세미콜론 구분)로 검색 루트를 직접 지정할 수 있다.
+function Find-SkillOnPc([string]$Name) {
+    $roots = @()
+    if (-not [string]::IsNullOrEmpty($env:GLOBALIZE_SEARCH_ROOTS)) {
+        $roots = @($env:GLOBALIZE_SEARCH_ROOTS -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    } else {
+        $skipTop = '^(Windows|Program Files|Program Files \(x86\)|ProgramData|\$Recycle\.Bin|System Volume Information|Recovery|PerfLogs)$'
+        foreach ($drv in @(Get-PSDrive -PSProvider FileSystem | Where-Object { $null -eq $_.DisplayRoot })) {
+            foreach ($d in @(Get-ChildItem $drv.Root -Directory -Force -ErrorAction SilentlyContinue)) {
+                if ($d.Name -notmatch $skipTop) { $roots += $d.FullName }
+            }
+        }
+    }
+    $globalFull = [System.IO.Path]::GetFullPath($GlobalRoot).TrimEnd('\')
+    $hits = @()
+    foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        foreach ($cd in @(Get-ChildItem $root -Directory -Recurse -Depth 3 -Force -ErrorAction SilentlyContinue -Filter '.claude')) {
+            if ($cd.FullName -match '\\(node_modules|AppData|\.git)\\') { continue }
+            $skill = Join-Path $cd.FullName "skills\$Name"
+            if ((Test-Path (Join-Path $skill 'SKILL.md')) -and
+                -not ([System.IO.Path]::GetFullPath($skill)).StartsWith($globalFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $hits += $skill
+            }
+        }
+    }
+    return @($hits | Select-Object -Unique)
+}
+
 switch ($Action) {
 
     'list' {
@@ -173,10 +282,11 @@ switch ($Action) {
                 }
                 if ($stale) { $status = "원본과 다름 - 'sync $($d.Name)' 필요" }
             }
-            $exMsg = ''
-            if ($ex.Count -gt 0) { $exMsg = "  제외: $($ex -join ', ')" }
+            $extra = ''
+            if ($ex.Count -gt 0) { $extra += "  제외: $($ex -join ', ')" }
+            if ($side.PSObject.Properties['repo'] -and $side.repo) { $extra += "  repo: $($side.repo)" }
             Write-Output "  $($d.Name)  [$status]"
-            Write-Output "    원본: $origin$exMsg  (마지막 동기화: $($side.syncedAt))"
+            Write-Output "    원본: $origin$extra  (마지막 동기화: $($side.syncedAt))"
         }
     }
 
@@ -210,6 +320,7 @@ switch ($Action) {
         if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
         Write-Sidecar $dst $skillName $src $Exclude
         Sync-One $dst
+        $null = Sync-Registry
         Write-Output "'$skillName' 전역 등록 완료: $dst"
         Write-Output "(새 세션부터 어떤 프로젝트에서든 /$skillName 사용 가능. 원본 수정 후에는 'sync'로 재동기화하세요.)"
     }
@@ -226,6 +337,117 @@ switch ($Action) {
         }
         if ($targets.Count -eq 0) { Write-Output "globalize로 등록된 전역 스킬이 없습니다. ('add'로 등록)"; break }
         foreach ($t in $targets) { Sync-One $t.FullName }
+        if (Sync-Registry) { Write-Output "registry.json 갱신됨 (관리 목록/저장소 정보 변경)" }
+    }
+
+    'autosync' {
+        # 세션 시작 훅용: 전체 동기화 + 레지스트리 갱신. 변경/문제가 있을 때만 출력하고, 절대 실패로 끝나지 않는다.
+        $msgs = @()
+        foreach ($t in @(Get-LinkedSkills)) {
+            try {
+                $msgs += @(@(Sync-One $t.FullName) | Where-Object { $_ -and $_ -notmatch '이미 최신 상태' })
+            } catch { $msgs += "!! $($t.Name): $($_.Exception.Message)" }
+        }
+        try { if (Sync-Registry) { $msgs += "registry.json 갱신됨" } }
+        catch { $msgs += "!! registry: $($_.Exception.Message)" }
+        $msgs = @($msgs | Where-Object { $_ })
+        if ($msgs.Count -gt 0) {
+            Write-Output "[globalize] 세션 시작 동기화:"
+            foreach ($m in $msgs) { Write-Output "  $m" }
+        }
+        exit 0
+    }
+
+    'restore' {
+        # restore [레지스트리경로] : 새 PC 이전 시 registry.json 기반으로 전역 스킬 일괄 복원.
+        # 원본 경로 확인 → 없으면 PC 검색 → 그래도 없으면 git clone 안내.
+        $regPath = $Target
+        if ([string]::IsNullOrEmpty($regPath)) { $regPath = Join-Path (Split-Path $PSScriptRoot -Parent) $RegistryName }
+        if (-not (Test-Path $regPath)) { throw "레지스트리 파일이 없습니다: $regPath ('add'로 스킬을 등록하면 자동 생성됩니다)" }
+        $reg = Get-Content $regPath -Raw | ConvertFrom-Json
+        $entries = @($reg.skills)
+        if ($entries.Count -eq 0) { Write-Output "레지스트리에 등록된 스킬이 없습니다."; break }
+        foreach ($e in $entries) {
+            $name = [string]$e.name
+            Assert-ValidName $name
+            $ex = @(@($e.exclude) | Where-Object { $_ })
+            $dst = Join-Path $GlobalRoot $name
+            if (Test-Path (Join-Path $dst $SidecarName)) { Write-Output "'$name': 이미 전역에 등록되어 있습니다."; continue }
+            if (Test-Path $dst) { Write-Output "!! '$name': 전역에 같은 이름의 비관리 스킬이 있습니다. 확인 후 'add <경로> -Force'로 직접 등록하세요."; continue }
+            $src = $null
+            if ($e.origin -and (Test-Path ([System.IO.Path]::Combine([string]$e.origin, 'SKILL.md')))) { $src = [string]$e.origin }
+            else {
+                Write-Output "'$name': 원본($($e.origin))이 없어 PC에서 검색합니다..."
+                $cands = @(Find-SkillOnPc $name)
+                if ($cands.Count -eq 1) { $src = $cands[0]; Write-Output "'$name': 발견 → $src" }
+                elseif ($cands.Count -gt 1) {
+                    Write-Output "!! '$name': 후보가 여러 개입니다. 원하는 경로로 'add <경로>'를 직접 실행하세요:"
+                    foreach ($c in $cands) { Write-Output "   $c" }
+                    continue
+                }
+            }
+            if ($null -eq $src) {
+                if ($e.repo) {
+                    Write-Output "!! '$name': PC에서 찾지 못했습니다. 저장소를 복제한 뒤 등록하세요:"
+                    Write-Output "   git clone $($e.repo)  →  add <클론경로>/$($e.repoPath)"
+                } else {
+                    Write-Output "!! '$name': PC에서 찾지 못했고 저장소 정보도 없습니다. 'add <경로>'로 직접 등록하세요."
+                }
+                continue
+            }
+            New-Item -ItemType Directory -Path $dst -Force | Out-Null
+            Write-Sidecar $dst $name $src $ex
+            $null = Sync-One $dst
+            Write-Output "'$name' 복원 완료: $src → $dst"
+        }
+        $null = Sync-Registry
+        Write-Output "(전역 스킬은 새 세션부터 인식됩니다. 'install-hook'으로 세션 시작 자동 동기화도 설정하세요.)"
+    }
+
+    'install-hook' {
+        # install-hook : 사용자 전역 settings.json 에 SessionStart 훅(autosync) 등록.
+        # 기존 globalize 훅이 있으면 최신 형태로 교체한다 (멱등).
+        $scriptPath = Join-Path $GlobalRoot 'globalize\scripts\globalize.ps1'
+        if (-not (Test-Path $scriptPath)) { throw "globalize가 전역에 등록되어 있지 않습니다. 먼저 'add globalize'로 전역 등록하세요." }
+        $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+        if ($null -ne $env:GLOBALIZE_SETTINGS) { $settingsPath = $env:GLOBALIZE_SETTINGS }   # 테스트용 재정의
+
+        $settings = $null
+        if (Test-Path $settingsPath) { $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json }
+        if ($null -eq $settings) { $settings = [pscustomobject]@{} }
+
+        $newHook = [pscustomobject]@{
+            type          = 'command'
+            command       = 'powershell'
+            args          = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, 'autosync')
+            timeout       = 60
+            async         = $true
+            statusMessage = '전역 스킬 동기화 중...'
+        }
+
+        # 기존 SessionStart 항목에서 globalize 훅만 걷어내고 나머지는 보존
+        $kept = @()
+        if ($settings.PSObject.Properties['hooks'] -and $settings.hooks.PSObject.Properties['SessionStart']) {
+            foreach ($m in @($settings.hooks.SessionStart)) {
+                $rest = @(@($m.hooks) | Where-Object { "$($_.command) $($_.args -join ' ')" -notmatch 'globalize\.ps1' })
+                if ($rest.Count -gt 0) { $m.hooks = $rest; $kept += $m }
+            }
+        }
+        $kept += [pscustomobject]@{ hooks = @($newHook) }
+
+        if (-not $settings.PSObject.Properties['hooks']) {
+            $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{})
+        }
+        if (-not $settings.hooks.PSObject.Properties['SessionStart']) {
+            $settings.hooks | Add-Member -NotePropertyName SessionStart -NotePropertyValue @()
+        }
+        $settings.hooks.SessionStart = $kept
+
+        $json = $settings | ConvertTo-Json -Depth 32
+        [System.IO.File]::WriteAllText($settingsPath, $json, $Utf8NoBom)
+        Write-Output "SessionStart 훅 등록 완료: $settingsPath"
+        Write-Output "  실행 명령: powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" autosync"
+        Write-Output "(새 세션 시작마다 원본 → 전역 자동 동기화. 다음 세션부터 적용됩니다.)"
     }
 
     'remove' {
@@ -239,6 +461,7 @@ switch ($Action) {
             throw "'$Target'은 globalize로 등록된 스킬이 아닙니다 (사이드카 없음). 실수로 다른 전역 스킬을 지우지 않도록 이 도구로는 제거하지 않습니다."
         }
         Remove-Item $dst -Recurse -Force
+        $null = Sync-Registry
         Write-Output "'$Target' 전역 복사본을 제거했습니다. 원본($($side.origin))은 그대로 남아 있습니다."
     }
 }

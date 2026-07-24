@@ -1,0 +1,32 @@
+{
+    "skills":  [
+                   {
+                       "name":  "cred",
+                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\cred",
+                       "repo":  "",
+                       "repoPath":  ".claude/skills/cred",
+                       "exclude":  [
+                                       "profiles",
+                                       "_backups"
+                                   ]
+                   },
+                   {
+                       "name":  "git",
+                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\git",
+                       "repo":  "",
+                       "repoPath":  ".claude/skills/git",
+                       "exclude":  [
+
+                                   ]
+                   },
+                   {
+                       "name":  "globalize",
+                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\globalize",
+                       "repo":  "",
+                       "repoPath":  ".claude/skills/globalize",
+                       "exclude":  [
+
+                                   ]
+                   }
+               ]
+}
