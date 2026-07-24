@@ -1,7 +1,7 @@
 ---
 name: cred
-description: Claude Code 계정 자격증명(~/.claude/.credentials.json)을 프로필로 저장(export)하거나 교체(import)하여 계정을 전환한다. 계정 전환, credential 교체/백업/등록, 프로필 목록 확인 요청 시 사용.
-argument-hint: list | export <이름> | import <이름> | add <파일경로> <이름> | backup | setaccount <이름> <이메일> | whoami [이름] | fixcache [이름]
+description: Claude Code 계정 자격증명(~/.claude/.credentials.json)을 프로필로 저장(save)하거나 교체(use)하여 계정을 전환하고, 프로필을 패키지로 추출(export)해 다른 PC로 옮겨 등록(import)한다. 계정 전환, credential 교체/백업/등록, 다른 PC로 계정 이전, 프로필 목록 확인 요청 시 사용.
+argument-hint: list | save <이름> | use <이름> | export <이름> [대상폴더] | import <파일> [이름] | backup | setaccount <이름> <이메일> | whoami [이름] | fixcache [이름]
 ---
 
 # Claude 계정 자격증명 전환 (cred)
@@ -18,12 +18,15 @@ argument-hint: list | export <이름> | import <이름> | add <파일경로> <�
 powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴더>\scripts\cred.ps1" <action> [인자...]
 ```
 
+액션 이름의 기준은 **프로필 저장소**다: 저장소에 들여오면 import, 저장소에서 밖으로 꺼내면 export.
+
 | 사용자 요청 | action |
 |---|---|
 | 프로필 목록 / 현재 어떤 계정인지 확인 | `list` |
-| 현재 로그인 상태를 프로필로 저장/갱신 | `export <이름>` (기존 프로필이 있으면 이전 토큰을 `_backups`에 백업한 뒤 바로 덮어씀) |
-| 특정 프로필로 계정 교체 | `import <이름>` |
-| 외부 credentials 파일을 프로필로 등록 | `add <파일경로> <이름>` |
+| 현재 로그인 상태를 프로필로 저장/갱신 | `save <이름>` (기존 프로필이 있으면 이전 토큰을 `_backups`에 백업한 뒤 바로 덮어씀) |
+| 특정 프로필로 계정 교체(전환) | `use <이름>` |
+| 프로필을 다른 PC로 가져갈 패키지(zip)로 추출 | `export <이름> [대상폴더]` (생략 시 `profiles\_exports\`에 생성) |
+| 패키지(zip)/외부 credentials 파일을 프로필로 등록 | `import <파일경로> [이름]` (패키지면 이름 생략 가능 — 원래 프로필 이름 사용. `add`는 별칭) |
 | 현재 상태만 백업 | `backup` |
 | 프로필에 계정(이메일) 기록/수정 | `setaccount <이름> <이메일>` 또는 `setaccount <이름> -FromCache` |
 | 토큰이 실제로 어느 계정인지 API로 확인 | `whoami` (현재 활성) 또는 `whoami <이름>` (특정 프로필) |

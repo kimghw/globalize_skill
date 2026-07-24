@@ -3,7 +3,7 @@
                    {
                        "name":  "cred",
                        "origin":  "E:\\dev\\accredential\\.claude\\skills\\cred",
-                       "repo":  "",
+                       "repo":  "https://github.com/kimghw/globalize-skills.git",
                        "repoPath":  ".claude/skills/cred",
                        "exclude":  [
                                        "profiles",
@@ -13,7 +13,7 @@
                    {
                        "name":  "git",
                        "origin":  "E:\\dev\\accredential\\.claude\\skills\\git",
-                       "repo":  "",
+                       "repo":  "https://github.com/kimghw/globalize-skills.git",
                        "repoPath":  ".claude/skills/git",
                        "exclude":  [
 
@@ -22,7 +22,7 @@
                    {
                        "name":  "globalize",
                        "origin":  "E:\\dev\\accredential\\.claude\\skills\\globalize",
-                       "repo":  "",
+                       "repo":  "https://github.com/kimghw/globalize-skills.git",
                        "repoPath":  ".claude/skills/globalize",
                        "exclude":  [
 

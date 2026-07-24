@@ -1,18 +1,24 @@
 ﻿# cred.ps1 - Claude Code 계정 자격증명(.credentials.json) 프로필 관리
 # 주의: 이 스크립트는 토큰 값을 절대 출력하지 않는다 (메타데이터만 표시).
 #
+# 액션 체계 (기준은 프로필 저장소):
+#   save <이름>            현재 활성 자격증명 → 프로필 저장 (구 export)
+#   use <이름>             프로필 → 활성 자격증명 (계정 전환, 구 import)
+#   export <이름> [폴더]   프로필 → 이동용 패키지(zip) 추출 (다른 PC로 가져가기)
+#   import <파일> [이름]   패키지(zip)/폴더/credentials 파일 → 프로필 등록 (add는 별칭)
+#
 # 프로필 구조:  <이름>\credentials.json - .credentials.json 사본 (토큰, 계정정보 없음)
 #               <이름>\account.json     - 계정(로그인) 정보: 이메일/조직, 토큰 없음
 #               <이름>\<이메일>          - 계정 표시용 빈 마커 파일 (탐색기에서 한눈에 확인용, 자동 관리)
 # 구버전 flat 파일(<이름>.json / <이름>.account.json)은 실행 시 자동으로 폴더 구조로 이전된다.
 #   source 종류: cache(로그인 시 캐시 사본) / api(fixcache로 조회 API 확인) / manual(이메일만 수동 기록)
-#   export 시 캐시 사본을 함께 저장하고, import 시 cache/api 기록을 ~/.claude.json에 복원해
+#   save 시 캐시 사본을 함께 저장하고, use 시 cache/api 기록을 ~/.claude.json에 복원해
 #   화면에 표시되는 계정(이메일)도 프로필에 맞게 바뀌도록 한다.
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('list', 'export', 'import', 'add', 'backup', 'setaccount', 'whoami', 'fixcache')]
+    [ValidateSet('list', 'save', 'use', 'export', 'import', 'add', 'backup', 'setaccount', 'whoami', 'fixcache')]
     [string]$Action,
 
     [Parameter(Position = 1)]
@@ -143,7 +149,7 @@ function Assert-ValidName([string]$n) {
     if ([string]::IsNullOrEmpty($n) -or $n -notmatch '^[A-Za-z0-9._-]+$') {
         throw "프로필 이름은 영문/숫자/._- 만 사용할 수 있습니다: '$n'"
     }
-    if ($n -like '_backup*') { throw "'_backup'으로 시작하는 이름은 예약되어 있습니다." }
+    if ($n -like '_*') { throw "'_'로 시작하는 이름은 예약되어 있습니다 (_backups, _exports 등 내부용)." }
 }
 
 function Backup-Current([string]$Reason) {
@@ -318,12 +324,12 @@ function Sync-ActiveToProfile {
     }
     $found = @()
     foreach ($p in @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Name -notlike '_backup*' })) {
+                     Where-Object { $_.Name -notlike '_*' })) {
         $side = Read-Sidecar $p.Name
         if ($null -ne $side -and $side.email -eq $cachedEmail) { $found += $p.Name }
     }
     if ($found.Count -eq 0) {
-        Write-Output "(자동 동기화 건너뜀: 현재 계정($cachedEmail)에 해당하는 프로필이 없습니다. 'export <이름>'으로 저장해두면 다음 전환 때 재로그인이 줄어듭니다.)"
+        Write-Output "(자동 동기화 건너뜀: 현재 계정($cachedEmail)에 해당하는 프로필이 없습니다. 'save <이름>'으로 저장해두면 다음 전환 때 재로그인이 줄어듭니다.)"
         return
     }
     if ($found.Count -gt 1) {
@@ -372,9 +378,9 @@ switch ($Action) {
         else              { Write-Output "  계정(화면 표시 캐시): (없음)" }
         Write-Output ""
         $profiles = @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-                      Where-Object { $_.Name -notlike '_backup*' })
+                      Where-Object { $_.Name -notlike '_*' })
         if ($profiles.Count -eq 0) {
-            Write-Output "저장된 프로필 없음. 'export <이름>'으로 현재 계정을 저장하세요."
+            Write-Output "저장된 프로필 없음. 'save <이름>'으로 현재 계정을 저장하세요."
         } else {
             Write-Output "프로필 목록 ($Store):"
             $activeMismatch = $null
@@ -396,8 +402,8 @@ switch ($Action) {
                 }
                 if ($null -ne $side -and $side.email) {
                     $srcTag = switch ($side.source) {
-                        'cache'  { '[로그인 캐시: import 시 화면 표시까지 복원됨]' }
-                        'api'    { '[API 확인: import 시 화면 표시까지 복원됨]' }
+                        'cache'  { '[로그인 캐시: use 시 화면 표시까지 복원됨]' }
+                        'api'    { '[API 확인: use 시 화면 표시까지 복원됨]' }
                         'manual' { '[수동 기록: 이메일만, 화면 표시 복원 안 됨]' }
                         default  { '[기록 방식 불명]' }
                     }
@@ -407,7 +413,7 @@ switch ($Action) {
                 }
                 if ($isActive -and $cachedEmail -and $null -ne $side -and $side.email -and $side.email -ne $cachedEmail) {
                     if ($side.source -in @('cache', 'api')) {
-                        $activeMismatch = "!! 화면 표시 계정($cachedEmail)이 활성 프로필 '$pname'의 계정($($side.email))과 다릅니다. 'import $pname'을 다시 실행하면 표시가 교정됩니다."
+                        $activeMismatch = "!! 화면 표시 계정($cachedEmail)이 활성 프로필 '$pname'의 계정($($side.email))과 다릅니다. 'use $pname'을 다시 실행하면 표시가 교정됩니다."
                     } else {
                         $activeMismatch = "!! 화면 표시 계정($cachedEmail)이 활성 프로필 '$pname'의 기록된 계정($($side.email))과 다릅니다. 'fixcache $pname'을 실행하면 API로 실제 계정을 확인해 교정합니다."
                     }
@@ -419,7 +425,8 @@ switch ($Action) {
         }
     }
 
-    'export' {
+    'save' {
+        # save <이름> : 현재 활성 자격증명을 프로필로 저장 (구 export)
         Assert-ValidName $Name
         if (-not (Test-Path $CredFile)) { throw "현재 자격증명 파일이 없습니다: $CredFile" }
         if (-not (Test-CredStructure $CredFile)) { throw "현재 자격증명 파일의 형식이 올바르지 않습니다." }
@@ -439,31 +446,13 @@ switch ($Action) {
         Write-Output "(계정 정보는 화면에 표시 중인 캐시 기준입니다. 방금 이 계정으로 로그인한 상태가 아니라면 setaccount로 확인/수정하세요.)"
     }
 
-    'add' {
-        # add <파일경로> <이름> : 외부 credentials 파일을 프로필로 등록
-        if ([string]::IsNullOrEmpty($Name) -or -not (Test-Path $Name)) { throw "등록할 파일을 찾을 수 없습니다: '$Name'" }
-        Assert-ValidName $Name2
-        if (-not (Test-CredStructure $Name)) { throw "'$Name' 파일이 올바른 credentials 형식이 아닙니다." }
-        $dest = Get-ProfileCredPath $Name2
-        if ((Test-Path $dest) -and -not $Force) {
-            throw "프로필 '$Name2'이 이미 있습니다. 덮어쓰려면 -Force 를 추가하세요."
-        }
-        $destDir = Get-ProfileDir $Name2
-        if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-        Copy-Item $Name $dest -Force
-        Write-Output ("프로필 '$Name2' 등록 완료  -  " + (Get-CredMeta $dest))
-        Write-Output "외부 파일이라 계정(이메일)을 알 수 없습니다. 'setaccount $Name2 <이메일>'로 기록해두는 것을 권장합니다."
-        Write-Output "원본($Name)은 더 이상 필요 없으면 삭제하는 것을 권장합니다 (git 유출 위험)."
-    }
-
-    'import' {
-        # import <이름 또는 파일경로>
-        if ([string]::IsNullOrEmpty($Name)) { throw "가져올 프로필 이름을 지정하세요. (list로 확인)" }
+    'use' {
+        # use <이름> : 프로필로 계정 전환 (구 import)
+        if ([string]::IsNullOrEmpty($Name)) { throw "전환할 프로필 이름을 지정하세요. (list로 확인)" }
         $src = Get-ProfileCredPath $Name
-        $profileName = $Name
         if (-not (Test-Path $src)) {
-            if (Test-Path $Name) { $src = $Name; $profileName = $null }   # 경로로 직접 지정한 경우
-            else { throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)" }
+            if (Test-Path $Name) { throw "use는 저장된 프로필만 전환합니다. 외부 파일/패키지는 먼저 'import $Name <이름>'으로 등록한 뒤 use 하세요." }
+            throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)"
         }
         if (-not (Test-CredStructure $src)) { throw "'$src' 파일이 올바른 credentials 형식이 아닙니다." }
 
@@ -476,7 +465,7 @@ switch ($Action) {
         }
 
         if (-not $alreadyActive) {
-            $bak = Backup-Current 'pre-import'
+            $bak = Backup-Current 'pre-use'
             Copy-Item $src $CredFile -Force
             if ($bak) { Write-Output "기존 자격증명 백업: $bak" }
             Write-Output ("교체 완료  -  " + (Get-CredMeta $CredFile))
@@ -485,13 +474,129 @@ switch ($Action) {
         }
 
         # 토큰이 이미 같아도 화면 표시 계정이 어긋나 있을 수 있으므로 항상 복원 시도
-        if ($profileName) {
-            Restore-AccountToConfig (Read-Sidecar $profileName)
-        }
+        Restore-AccountToConfig (Read-Sidecar $Name)
 
         if (-not $alreadyActive) {
             Write-Output ""
             Write-Output "!! 적용하려면 Claude Code를 재시작(새 세션 시작)해야 합니다."
+        }
+    }
+
+    'export' {
+        # export <이름> [대상폴더] : 프로필을 다른 PC로 옮길 수 있는 패키지(zip)로 추출 (신규)
+        Assert-ValidName $Name
+        $srcCred = Get-ProfileCredPath $Name
+        if (-not (Test-Path $srcCred)) {
+            if ((Test-Path $CredFile) -and (Test-CredStructure $CredFile)) {
+                throw "프로필 '$Name'이 없습니다. 현재 계정을 프로필로 저장하려면 'save $Name'을 사용하세요. (export는 저장된 프로필을 이동용 패키지로 추출합니다)"
+            }
+            throw "프로필 '$Name'을 찾을 수 없습니다. (list로 확인)"
+        }
+        if (-not (Test-CredStructure $srcCred)) { throw "프로필 '$Name'의 credentials 형식이 올바르지 않습니다." }
+
+        # 이 프로필이 현재 활성 계정이면 최신 토큰이 패키지에 담기도록 먼저 동기화
+        Sync-ActiveToProfile
+
+        $side = Read-Sidecar $Name
+        $emailTag = 'noaccount'
+        if ($null -ne $side -and $side.email -and $side.email -notmatch '[\\/:*?"<>|\s]') { $emailTag = $side.email }
+        $destDir = $Name2
+        if ([string]::IsNullOrEmpty($destDir)) { $destDir = Join-Path $Store '_exports' }
+        if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $zipPath = Join-Path $destDir "cred-package-$Name-$emailTag-$stamp.zip"
+
+        $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $man = New-Object 'System.Collections.Generic.Dictionary[string,object]'
+        $man['format']     = 'cred-package/1'
+        $man['name']       = $Name
+        $man['email']      = $emailTag
+        $man['exportedAt'] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+
+        $tmpDir = Join-Path $env:TEMP ("cred-export-" + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        try {
+            Copy-Item $srcCred (Join-Path $tmpDir 'credentials.json') -Force
+            $sidePath = Get-SidecarPath $Name
+            if (Test-Path $sidePath) { Copy-Item $sidePath (Join-Path $tmpDir 'account.json') -Force }
+            [System.IO.File]::WriteAllText((Join-Path $tmpDir 'package.json'), $ser.Serialize($man), $Utf8NoBom)
+            Compress-Archive -Path (Join-Path $tmpDir '*') -DestinationPath $zipPath -Force
+        } finally {
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Output "패키지 생성 완료: $zipPath"
+        Write-Output ("  계정: $emailTag  -  " + (Get-CredMeta $srcCred))
+        Write-Output "받는 PC에서 'import <패키지파일>'로 등록하면 계정 정보까지 복원됩니다."
+        Write-Output "!! 이 파일에는 로그인 토큰이 들어 있습니다. 클라우드 동기화 폴더에 두지 말고, 옮긴 뒤 양쪽에서 삭제하세요."
+        Write-Output "!! refresh 토큰은 사용 시마다 회전됩니다. 이 PC에서 이 계정을 계속 쓰면 패키지 속 토큰이 낡으니, 만든 뒤 바로 옮겨 등록하세요."
+    }
+
+    { $_ -in 'import', 'add' } {
+        # import <패키지zip|폴더|credentials파일> [이름] : 외부 자격증명을 프로필로 등록 (add는 별칭)
+        if ([string]::IsNullOrEmpty($Name)) { throw "등록할 패키지(zip)나 credentials 파일 경로를 지정하세요: import <파일> [이름]" }
+        if (-not (Test-Path $Name)) {
+            if (Test-Path (Get-ProfileCredPath $Name)) {
+                throw "계정 전환은 'use $Name'을 사용하세요. (import는 이제 패키지/외부 파일을 저장소에 등록합니다)"
+            }
+            throw "등록할 파일을 찾을 수 없습니다: '$Name'"
+        }
+
+        $srcItem = Get-Item $Name
+        $srcCred = $null; $srcSide = $null; $pkgName = $null; $tmpDir = $null
+        try {
+            if ($srcItem.PSIsContainer -or $srcItem.Extension -ieq '.zip') {
+                $baseDir = $srcItem.FullName
+                if (-not $srcItem.PSIsContainer) {
+                    $tmpDir = Join-Path $env:TEMP ("cred-import-" + [Guid]::NewGuid().ToString('N'))
+                    Expand-Archive -Path $srcItem.FullName -DestinationPath $tmpDir -Force
+                    $baseDir = $tmpDir
+                }
+                $srcCred = Join-Path $baseDir 'credentials.json'
+                if (-not (Test-Path $srcCred)) { throw "'$Name' 안에 credentials.json이 없습니다 (cred 패키지가 아닙니다)." }
+                $p = Join-Path $baseDir 'account.json'
+                if (Test-Path $p) { $srcSide = $p }
+                $p = Join-Path $baseDir 'package.json'
+                if (Test-Path $p) {
+                    try { $pkgName = [CredJson]::GetString([System.IO.File]::ReadAllText($p), 'name') } catch {}
+                }
+            } else {
+                $srcCred = $srcItem.FullName   # 단일 credentials 파일 (구 add 용법)
+            }
+            if (-not (Test-CredStructure $srcCred)) { throw "'$Name'의 credentials가 올바른 형식이 아닙니다." }
+
+            $newName = $Name2
+            if ([string]::IsNullOrEmpty($newName)) { $newName = $pkgName }
+            if ([string]::IsNullOrEmpty($newName)) { throw "프로필 이름을 지정하세요: import <파일> <이름>" }
+            Assert-ValidName $newName
+
+            $dest = Get-ProfileCredPath $newName
+            if ((Test-Path $dest) -and -not $Force) {
+                throw "프로필 '$newName'이 이미 있습니다. 덮어쓰려면 -Force 를 추가하세요."
+            }
+            $destDir = Get-ProfileDir $newName
+            if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+            if (Test-Path $dest) {
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+                Copy-Item $dest (Join-Path $BackupDir "$stamp-profile-$newName.json") -Force
+            }
+            Copy-Item $srcCred $dest -Force
+            $acctMsg = $null
+            if ($srcSide) {
+                Copy-Item $srcSide (Get-SidecarPath $newName) -Force
+                Update-EmailMarker $newName
+                $side = Read-Sidecar $newName
+                if ($null -ne $side -and $side.email) { $acctMsg = "계정: $($side.email)" }
+            }
+            Write-Output ("프로필 '$newName' 등록 완료  -  " + (Get-CredMeta $dest))
+            if ($acctMsg) {
+                Write-Output "$acctMsg (패키지의 계정 정보를 함께 복원했습니다)"
+            } else {
+                Write-Output "계정(이메일) 정보가 없습니다. 'fixcache $newName'(API 확인) 또는 'setaccount $newName <이메일>'로 기록해두는 것을 권장합니다."
+            }
+            Write-Output "원본($Name)은 더 이상 필요 없으면 삭제하는 것을 권장합니다 (토큰 유출 위험)."
+            Write-Output "이 계정으로 전환하려면 'use $newName'을 실행하세요."
+        } finally {
+            if ($tmpDir) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
         }
     }
 
