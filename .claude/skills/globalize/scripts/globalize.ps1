@@ -94,6 +94,27 @@ function Get-RepoInfo([string]$Path) {
     return @{ repo = $repo; repoPath = $repoPath }
 }
 
+# 원본 프로젝트의 git 상태 요약 (list 표시용): 미커밋 변경 수, 미푸시 커밋 수, 원격/upstream 유무
+function Get-GitState([string]$Path) {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Test-Path $Path)) { return $null }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $top = git -C $Path rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $top) { return $null }
+        $root = [System.IO.Path]::GetFullPath((([string]$top).Trim() -replace '/', '\'))
+        $dirty = @(git -C $Path status --porcelain 2>$null | Where-Object { $_ }).Count
+        $remote = git -C $Path config --get remote.origin.url 2>$null
+        $hasRemote = ($LASTEXITCODE -eq 0 -and $remote)
+        $ahead = 0; $noUpstream = $false
+        if ($hasRemote) {
+            $cnt = git -C $Path rev-list --count '@{u}..HEAD' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $null -ne $cnt) { $ahead = [int][string]$cnt } else { $noUpstream = $true }
+        }
+        return @{ root = $root; dirty = $dirty; ahead = $ahead; hasRemote = [bool]$hasRemote; noUpstream = $noUpstream }
+    } finally { $ErrorActionPreference = $prevEap }
+}
+
 function Write-Sidecar([string]$Dir, [string]$SkillName, [string]$Origin, [string[]]$Ex) {
     $ri = Get-RepoInfo $Origin
     $obj = [ordered]@{
@@ -287,6 +308,17 @@ switch ($Action) {
             if ($side.PSObject.Properties['repo'] -and $side.repo) { $extra += "  repo: $($side.repo)" }
             Write-Output "  $($d.Name)  [$status]"
             Write-Output "    원본: $origin$extra  (마지막 동기화: $($side.syncedAt))"
+            # 원본 프로젝트의 git 상태 (미커밋/미푸시가 있으면 관리 흐름에서 커밋+푸시를 제안)
+            $gs = Get-GitState $origin
+            if ($null -ne $gs) {
+                $parts = @()
+                if ($gs.dirty -gt 0)      { $parts += "미커밋 $($gs.dirty)" }
+                if (-not $gs.hasRemote)   { $parts += '원격 없음' }
+                elseif ($gs.noUpstream)   { $parts += 'upstream 없음' }
+                elseif ($gs.ahead -gt 0)  { $parts += "미푸시 $($gs.ahead)" }
+                if ($parts.Count -eq 0) { Write-Output "    git: 정리됨  ($($gs.root))" }
+                else                    { Write-Output "    git: $($parts -join ', ')  ($($gs.root))" }
+            }
         }
     }
 
