@@ -2,6 +2,7 @@
 # 주의: 이 스크립트는 토큰 값을 절대 출력하지 않는다 (메타데이터만 표시).
 #
 # 액션 체계 (기준은 프로필 저장소):
+#   (인자 없음)            프로필 목록을 번호 메뉴로 보여주고 선택한 계정으로 전환 (대화형)
 #   save <이름>            현재 활성 자격증명 → 프로필 저장 (구 export)
 #   use <이름>             프로필 → 활성 자격증명 (계정 전환, 구 import)
 #   export <이름> [폴더]   프로필 → 이동용 패키지(zip) 추출 (다른 PC로 가져가기)
@@ -17,9 +18,9 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [ValidateSet('list', 'save', 'use', 'export', 'import', 'add', 'backup', 'setaccount', 'whoami', 'fixcache')]
-    [string]$Action,
+    [string]$Action = '',
 
     [Parameter(Position = 1)]
     [string]$Name,
@@ -351,6 +352,43 @@ function Sync-ActiveToProfile {
 }
 
 Invoke-StoreMigration
+
+# 인자 없이 실행: 프로필 목록을 번호 메뉴로 보여주고 선택한 계정으로 전환한다 (대화형).
+if ([string]::IsNullOrEmpty($Action)) {
+    $menuProfiles = @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -notlike '_*' })
+    if ($menuProfiles.Count -eq 0) {
+        Write-Output "저장된 프로필이 없습니다. 'save <이름>'으로 현재 계정을 먼저 저장하세요."
+        exit 0
+    }
+    $menuActiveHash = $null
+    if ((Test-Path $CredFile) -and (Test-CredStructure $CredFile)) { $menuActiveHash = Get-Sha $CredFile }
+    Write-Output "전환할 계정을 선택하세요:"
+    for ($i = 0; $i -lt $menuProfiles.Count; $i++) {
+        $pname = $menuProfiles[$i].Name
+        $credPath = Get-ProfileCredPath $pname
+        $mark = '  '
+        if ($menuActiveHash -and (Test-Path $credPath) -and (Get-Sha $credPath) -eq $menuActiveHash) { $mark = '* ' }
+        $side = Read-Sidecar $pname
+        $email = '(계정 미기록)'
+        if ($null -ne $side -and $side.email) { $email = $side.email }
+        if ((Test-Path $credPath) -and (Test-CredStructure $credPath)) { $meta = Get-CredMeta $credPath }
+        else                                                           { $meta = '(토큰 없음/형식 오류)' }
+        Write-Output ("  {0}) {1}{2}  {3}  -  {4}" -f ($i + 1), $mark, $pname, $email, $meta)
+    }
+    Write-Output "  (* = 현재 활성 토큰과 동일)"
+    try { $sel = Read-Host "번호 입력 (Enter=취소)" }
+    catch { throw "대화형 입력을 사용할 수 없는 환경입니다. 'cred.ps1 use <이름>'처럼 액션을 지정해 실행하세요." }
+    if ([string]::IsNullOrWhiteSpace($sel)) { Write-Output "취소했습니다."; exit 0 }
+    $selNum = 0
+    if (-not [int]::TryParse($sel.Trim(), [ref]$selNum) -or $selNum -lt 1 -or $selNum -gt $menuProfiles.Count) {
+        throw "1~$($menuProfiles.Count) 범위의 번호를 입력하세요: '$sel'"
+    }
+    $Action = 'use'
+    $Name = $menuProfiles[$selNum - 1].Name
+    Write-Output ""
+    Write-Output "→ 'use $Name' 실행"
+}
 
 switch ($Action) {
 
