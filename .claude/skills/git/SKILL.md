@@ -8,6 +8,19 @@ argument-hint: (없음: commit+push) | pull | revert | public | private | help |
 
 인자에 따라 아래 규칙대로 git 작업을 수행한다.
 
+## 공통 규칙: 원격(origin) 미설정 처리
+
+push / pull / public / private 등 **원격이 필요한 작업**을 하기 전에 `git remote -v`(또는 `git remote get-url origin`)로 origin 존재 여부를 먼저 확인한다. origin이 없으면 실패 메시지만 출력하고 끝내지 말고, `AskUserQuestion` 도구로 사용자에게 필요한 정보를 요청한다:
+
+> "이 저장소에 원격(origin)이 없습니다. 어떻게 할까요?"
+- 옵션 1: **GitHub에 새 레포 생성 (private)** — `gh` 사용 가능하면 `gh repo create <레포명> --private --source . --remote origin --push` 실행. 레포명 기본값은 현재 폴더명이며, 사용자가 다른 이름을 주면 그것을 쓴다.
+- 옵션 2: **기존 원격 URL 연결** — 사용자에게 URL을 물어 `git remote add origin <URL>` 후 작업 계속. URL을 받기 전에는 진행하지 않는다.
+- 옵션 3: **원격 없이 진행** — 로컬 커밋만 유지하고 push/pull은 건너뜀 (해당 작업이 원격 전용이면 그냥 종료).
+
+옵션 1을 고르면 `gh --version` / `gh auth status`를 먼저 확인하고, 미설치·미인증이면 4번 규칙과 같은 안내를 하고 옵션 2로 유도한다.
+
+**최초 푸시 전 안전 점검**: 원격에 처음 올리는 경우, 커밋에 자격증명·토큰·개인 프로필 파일(예: `credentials.json`, `profiles/`, `.env`)이 포함되어 있는지 `git ls-files`로 확인한다. 포함되어 있으면 그대로 밀지 말고 사용자에게 알리고, `.gitignore` 추가 및 추적 해제 여부를 먼저 확인받는다. private 레포라도 마찬가지로 알린다.
+
 ## 동작 규칙
 
 0. **인자가 `help` / `-h` / `--help`인 경우**: 본 스킬이 받는 인자 목록과 각 인자의 동작 설명을 한눈에 출력하고 종료 (실제 git 작업 수행 안 함).
@@ -31,9 +44,10 @@ argument-hint: (없음: commit+push) | pull | revert | public | private | help |
    - 변경사항이 없으면 커밋할 내용이 없으므로 `git pull`을 실행해 원격 변경을 가져온 뒤 종료 (2번 `pull` 동작과 동일)
    - 변경사항이 있으면 diff를 분석해 간결한 커밋 메시지 자동 생성 (한국어, 1줄)
    - `git commit`으로 커밋
-   - `git push`로 현재 브랜치에 푸시 (upstream 없으면 `-u origin <branch>` 사용)
+   - `git push`로 현재 브랜치에 푸시 (upstream 없으면 `-u origin <branch>` 사용). origin 자체가 없으면 위 **공통 규칙**에 따라 사용자에게 원격 정보를 요청한다 — 커밋은 이미 끝났으므로 원격을 붙이면 그 커밋을 그대로 푸시한다.
 
 2. **인자가 `pull`인 경우**:
+   - origin이 없으면 위 **공통 규칙**에 따라 처리 (원격을 새로 연결한 경우 pull 대신 첫 푸시가 맞는지 확인)
    - `git pull`을 실행하고 결과를 보여줌
 
 3. **인자가 `revert`인 경우** (미커밋 변경 전체 취소 — 파괴적):
@@ -56,7 +70,7 @@ argument-hint: (없음: commit+push) | pull | revert | public | private | help |
      - `gh --version`으로 GitHub CLI 설치 여부 확인. 없으면 "gh CLI 미설치 — `winget install GitHub.cli`(Windows) 또는 https://cli.github.com 설치 후 재시도" 안내 후 종료
      - `gh auth status`로 인증 확인. 미인증이면 "`gh auth login` 먼저 실행" 안내 후 종료
    - 현재 origin 저장소 식별:
-     - `git remote get-url origin`으로 원격 URL 획득. 없으면 "origin 미설정" 출력 후 종료
+     - `git remote get-url origin`으로 원격 URL 획득. 없으면 위 **공통 규칙**에 따라 사용자에게 원격 정보를 요청하고, 연결된 뒤 이어서 진행 (연결을 원치 않으면 종료)
      - URL에서 `OWNER/REPO` 추출 (예: `git@github.com:foo/bar.git` 또는 `https://github.com/foo/bar.git` → `foo/bar`)
    - 현재 가시성 조회: `gh repo view <OWNER/REPO> --json visibility -q .visibility`
      - 이미 요청한 상태와 같으면 "이미 <public|private> 상태입니다" 출력 후 종료
