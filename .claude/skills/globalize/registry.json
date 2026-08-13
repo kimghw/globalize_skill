@@ -2,8 +2,8 @@
     "skills":  [
                    {
                        "name":  "cred",
-                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\cred",
-                       "repo":  "https://github.com/kimghw/globalize-skills.git",
+                       "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\cred",
+                       "repo":  "https://github.com/kimghw/globalize_skill.git",
                        "repoPath":  ".claude/skills/cred",
                        "exclude":  [
                                        "profiles",
@@ -12,8 +12,8 @@
                    },
                    {
                        "name":  "git",
-                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\git",
-                       "repo":  "https://github.com/kimghw/globalize-skills.git",
+                       "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\git",
+                       "repo":  "https://github.com/kimghw/globalize_skill.git",
                        "repoPath":  ".claude/skills/git",
                        "exclude":  [
 
@@ -21,8 +21,8 @@
                    },
                    {
                        "name":  "globalize",
-                       "origin":  "E:\\dev\\accredential\\.claude\\skills\\globalize",
-                       "repo":  "https://github.com/kimghw/globalize-skills.git",
+                       "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\globalize",
+                       "repo":  "https://github.com/kimghw/globalize_skill.git",
                        "repoPath":  ".claude/skills/globalize",
                        "exclude":  [
 

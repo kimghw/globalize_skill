@@ -17,7 +17,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('list', 'add', 'sync', 'update', 'remove', 'autosync', 'restore', 'install-hook')]
+    [ValidateSet('list', 'add', 'sync', 'update', 'remove', 'autosync', 'restore', 'install-hook', 'git')]
     [string]$Action,
 
     [Parameter(Position = 1)]
@@ -65,6 +65,23 @@ function Get-SkillFiles([string]$Root, [string[]]$Ex) {
 }
 
 function Get-Sha([string]$Path) { (Get-FileHash $Path -Algorithm SHA256).Hash }
+
+# 트리 지문 "파일수|총크기|최신mtime틱" — autosync fast-path 용(해시·git 호출 없음, 사이드카 제외)
+function Get-TreeFingerprint([string]$Root, [string[]]$Ex) {
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $n = 0; $size = [long]0; $max = [long]0
+    foreach ($f in @(Get-ChildItem $rootFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $rel = $f.FullName.Substring($rootFull.Length).TrimStart('\')
+        $segs = $rel -split '\\'
+        if ($segs[-1] -ieq $SidecarName) { continue }
+        $skip = $false
+        foreach ($e in $Ex) { if ($segs -contains $e) { $skip = $true; break } }
+        if ($skip) { continue }
+        $n++; $size += $f.Length
+        if ($f.LastWriteTimeUtc.Ticks -gt $max) { $max = $f.LastWriteTimeUtc.Ticks }
+    }
+    return "$n|$size|$max"
+}
 
 function Read-Sidecar([string]$Dir) {
     $p = Join-Path $Dir $SidecarName
@@ -380,14 +397,38 @@ switch ($Action) {
 
     'autosync' {
         # 세션 시작 훅용: 전체 동기화 + 레지스트리 갱신. 변경/문제가 있을 때만 출력하고, 절대 실패로 끝나지 않는다.
-        $msgs = @()
+        # fast-path: 원본·전역 양쪽 트리 지문이 지난 실행과 같으면 해시 비교·git 호출 없이 건너뛴다
+        # (세션 기동 지연 최소화 — 지문 캐시 = $GlobalRoot\.globalize-autosync.json, 수동 sync 는 항상 전체 검사).
+        $fpPath = Join-Path $GlobalRoot '.globalize-autosync.json'
+        $fpCache = @{}
+        if (Test-Path $fpPath) {
+            try {
+                ([System.IO.File]::ReadAllText($fpPath) | ConvertFrom-Json).PSObject.Properties |
+                    ForEach-Object { $fpCache[$_.Name] = [string]$_.Value }
+            } catch { $fpCache = @{} }
+        }
+        $msgs = @(); $newFp = [ordered]@{}; $syncedAny = $false
         foreach ($t in @(Get-LinkedSkills)) {
             try {
+                $side = Read-Sidecar $t.FullName
+                $ex = @(@($side.exclude) | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                $fp = ''
+                if ($null -ne $side -and (Test-Path ([string]$side.origin))) {
+                    $fp = (Get-TreeFingerprint ([string]$side.origin) $ex) + '/' + (Get-TreeFingerprint $t.FullName $ex)
+                }
+                if ($fp -and [string]$fpCache[$t.Name] -eq $fp) { $newFp[$t.Name] = $fp; continue }   # 변경 없음 — 스킵
                 $msgs += @(@(Sync-One $t.FullName) | Where-Object { $_ -and $_ -notmatch '이미 최신 상태' })
+                $syncedAny = $true
+                if ($null -ne $side -and (Test-Path ([string]$side.origin))) {
+                    $newFp[$t.Name] = (Get-TreeFingerprint ([string]$side.origin) $ex) + '/' + (Get-TreeFingerprint $t.FullName $ex)
+                }
             } catch { $msgs += "!! $($t.Name): $($_.Exception.Message)" }
         }
-        try { if (Sync-Registry) { $msgs += "registry.json 갱신됨" } }
-        catch { $msgs += "!! registry: $($_.Exception.Message)" }
+        if ($syncedAny) {   # 스킬 변화가 없으면 registry 도 변하지 않는다 — git 호출 생략
+            try { if (Sync-Registry) { $msgs += "registry.json 갱신됨" } }
+            catch { $msgs += "!! registry: $($_.Exception.Message)" }
+        }
+        try { [System.IO.File]::WriteAllText($fpPath, (ConvertTo-Json $newFp), $Utf8NoBom) } catch {}
         $msgs = @($msgs | Where-Object { $_ })
         if ($msgs.Count -gt 0) {
             Write-Output "[globalize] 세션 시작 동기화:"
@@ -454,10 +495,15 @@ switch ($Action) {
         if (Test-Path $settingsPath) { $settings = [System.IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json }
         if ($null -eq $settings) { $settings = [pscustomobject]@{} }
 
+        # 훅은 초경량 진입점(autosync-fast.ps1)을 가리킨다 — 변화 없으면 즉시 종료,
+        # 변화 있을 때만 본체 autosync 위임(세션 기동 지연 최소화).
+        $fastPath = Join-Path (Split-Path $scriptPath -Parent) 'autosync-fast.ps1'
+        if (Test-Path $fastPath) { $hookTarget = @('-File', $fastPath) }
+        else                     { $hookTarget = @('-File', $scriptPath, 'autosync') }   # 구버전 폴백
         $newHook = [pscustomobject]@{
             type          = 'command'
             command       = 'powershell'
-            args          = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, 'autosync')
+            args          = @('-NoProfile', '-ExecutionPolicy', 'Bypass') + $hookTarget
             timeout       = 60
             async         = $true
             statusMessage = '전역 스킬 동기화 중...'
@@ -484,7 +530,7 @@ switch ($Action) {
         $json = $settings | ConvertTo-Json -Depth 32
         [System.IO.File]::WriteAllText($settingsPath, $json, $Utf8NoBom)
         Write-Output "SessionStart 훅 등록 완료: $settingsPath"
-        Write-Output "  실행 명령: powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" autosync"
+        Write-Output "  실행 명령: powershell -NoProfile -ExecutionPolicy Bypass $($hookTarget -join ' ')"
         Write-Output "(새 세션 시작마다 원본 → 전역 자동 동기화. 다음 세션부터 적용됩니다.)"
     }
 
@@ -501,5 +547,62 @@ switch ($Action) {
         Remove-Item $dst -Recurse -Force
         $null = Sync-Registry
         Write-Output "'$Target' 전역 복사본을 제거했습니다. 원본($($side.origin))은 그대로 남아 있습니다."
+    }
+
+    'git' {
+        # git [커밋메시지] : 전역 스킬 전체를 원본과 동기화한 뒤, 각 원본이 속한 git 저장소의
+        # 변경을 커밋+푸시한다 (같은 저장소를 쓰는 스킬들은 한 번만 처리).
+        # 메시지를 생략하면 "스킬 갱신: <스킬이름들>" 기본 메시지를 쓴다.
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git 명령을 찾을 수 없습니다." }
+        $linked = @(Get-LinkedSkills)
+        if ($linked.Count -eq 0) { Write-Output "globalize로 등록된 전역 스킬이 없습니다. ('add'로 등록)"; break }
+        foreach ($t in $linked) { Sync-One $t.FullName }
+        if (Sync-Registry) { Write-Output "registry.json 갱신됨" }
+
+        # 원본들의 저장소 루트 수집 (중복 제거) + 루트별 소속 스킬 이름
+        $repos = [ordered]@{}
+        foreach ($t in $linked) {
+            $side = Read-Sidecar $t.FullName
+            if ($null -eq $side) { continue }
+            $gs = Get-GitState ([string]$side.origin)
+            if ($null -eq $gs) { continue }
+            if (-not $repos.Contains($gs.root)) { $repos[$gs.root] = @{ state = $gs; skills = @() } }
+            $repos[$gs.root].skills += [string]$side.name
+        }
+        if ($repos.Count -eq 0) { Write-Output "git 저장소 안에 있는 원본이 없습니다."; break }
+
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            foreach ($root in @($repos.Keys)) {
+                $gs = $repos[$root].state
+                $names = @($repos[$root].skills)
+                Write-Output ""
+                Write-Output "[$root] (스킬: $($names -join ', '))"
+                if ($gs.dirty -gt 0) {
+                    git -C $root add -A 2>$null
+                    $msg = $Target
+                    if ([string]::IsNullOrEmpty($msg)) { $msg = "스킬 갱신: $($names -join ', ')" }
+                    $null = git -C $root commit -m $msg 2>$null
+                    if ($LASTEXITCODE -ne 0) { Write-Output "  !! 커밋 실패 - 저장소 상태를 직접 확인하세요."; continue }
+                    Write-Output "  커밋: $msg"
+                } else {
+                    Write-Output "  커밋할 변경 없음"
+                }
+                if (-not $gs.hasRemote) {
+                    Write-Output "  !! 원격(remote)이 없어 푸시를 건너뜁니다. 'git -C $root remote add origin <URL>' 후 다시 실행하세요."
+                    continue
+                }
+                # 방금 커밋을 반영해 미푸시 수를 다시 계산 (upstream 없으면 -1)
+                $ahead = -1
+                $cnt = git -C $root rev-list --count '@{u}..HEAD' 2>$null
+                if ($LASTEXITCODE -eq 0 -and $null -ne $cnt) { $ahead = [int][string]$cnt }
+                if ($ahead -eq 0) { Write-Output "  푸시할 커밋 없음 (원격과 동일)"; continue }
+                if ($ahead -lt 0) { $null = git -C $root push -u origin HEAD 2>$null }
+                else              { $null = git -C $root push 2>$null }
+                if ($LASTEXITCODE -eq 0) { Write-Output "  푸시 완료" }
+                else { Write-Output "  !! 푸시 실패 - 원격이 앞서 있을 수 있습니다. 'git -C $root pull' 후 다시 실행하세요." }
+            }
+        } finally { $ErrorActionPreference = $prevEap }
     }
 }

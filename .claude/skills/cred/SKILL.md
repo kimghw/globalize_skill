@@ -7,7 +7,7 @@ argument-hint: (없음: 대화형 번호 메뉴로 전환) | list | save <이름
 # Claude 계정 자격증명 전환 (cred)
 
 `~/.claude/.credentials.json`(Claude Code 로그인 토큰)을 프로필 단위로 관리한다.
-프로필 저장소는 `E:\dev\accredential\.claude\skills\cred\profiles\` 이며, 이 스킬이 어디에 설치되어 있든(프로젝트 원본/전역 복사본) 항상 이 저장소 하나만 사용한다 (`CRED_STORE` 환경변수로 재정의 가능).
+프로필 저장소는 `E:\dev\globalize_skill\.claude\skills\cred\profiles\` 이며, 이 스킬이 어디에 설치되어 있든(프로젝트 원본/전역 복사본) 항상 이 저장소 하나만 사용한다 (`CRED_STORE` 환경변수로 재정의 가능).
 전역 복사본(`~/.claude/skills/cred/`)은 globalize 스킬이 관리한다 — 원본 수정 후에는 `/globalize update cred`로 동기화한다.
 
 모든 실제 작업은 이 스킬 폴더의 `scripts/cred.ps1` 스크립트가 수행한다. credentials 파일을 직접 읽거나 수정하지 말 것.
@@ -65,4 +65,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴
 1. **토큰 값을 절대 출력하지 않는다.** `.credentials.json`이나 프로필 토큰 파일(`<이름>\credentials.json`)을 Read/cat/type 하지 않는다. 항상 스크립트를 통해서만 다룬다. 스크립트가 보여주는 메타데이터(계정 이메일, 구독 종류, 만료일)만 사용자에게 전달한다. (`<이름>\account.json` 사이드카에는 토큰이 없지만, 역시 스크립트로만 다룬다.)
 2. `use`로 토큰이 실제로 교체된 경우에는 반드시 안내한다: **"적용하려면 Claude Code를 재시작(새 세션 시작)해야 합니다."** 현재 실행 중인 세션은 기존 토큰을 계속 사용할 수 있다. (이미 해당 프로필이 활성 상태였다면 스크립트가 재시작 안내를 출력하지 않으며 재시작도 필요 없다.)
 3. 전환은 항상 위 "전환 흐름"을 따른다 — 이름이 지정되지 않았으면 AskUserQuestion으로 확인받은 뒤에만 `use` 한다. 확인 없이 임의로 계정을 교체하지 않는다.
-4. 저장소(`.claude\skills\cred\profiles\`)는 반드시 git에서 제외된 상태를 유지한다 (accredential 프로젝트 루트 `.gitignore`의 `profiles/` 패턴 + 스킬 폴더 자체의 `.gitignore` 이중 방어). credentials 파일을 저장소 밖의 다른 위치로 복사하지 않으며, 저장소 밖에 흩어진 credentials 파일을 발견하면 `import`로 등록한 뒤 원본 삭제를 권장한다. 유일한 예외는 `export` 패키지(다른 PC 이전 목적)로, 이때는 전송 후 양쪽에서 패키지 파일을 삭제하도록 반드시 안내한다.
+4. 저장소(`.claude\skills\cred\profiles\`)는 반드시 git에서 제외된 상태를 유지한다 (globalize_skill 프로젝트 루트 `.gitignore`의 `profiles/` 패턴 + 스킬 폴더 자체의 `.gitignore` 이중 방어). credentials 파일을 저장소 밖의 다른 위치로 복사하지 않으며, 저장소 밖에 흩어진 credentials 파일을 발견하면 `import`로 등록한 뒤 원본 삭제를 권장한다. 유일한 예외는 `export` 패키지(다른 PC 이전 목적)로, 이때는 전송 후 양쪽에서 패키지 파일을 삭제하도록 반드시 안내한다.

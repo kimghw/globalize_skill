@@ -8,6 +8,46 @@ argument-hint: "(없음: commit+push) | pull | revert | public | private | help 
 
 인자에 따라 아래 규칙대로 git 작업을 수행한다.
 
+## 실행 방식: sonnet 서브에이전트에 위임 (기본)
+
+실제 git 작업은 **직접 하지 말고** `Agent` 도구로 sonnet 서브에이전트를 띄워 그 안에서 끝낸다.
+호출 형태:
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  run_in_background: false,
+  description: "git <동작>",
+  prompt: "<아래 프롬프트 규격>"
+)
+```
+
+**서브에이전트에 주는 프롬프트 규격** — 다음 세 가지만 넣는다:
+1. 이 스킬 파일의 절대경로(`<스킬 base 디렉터리>/SKILL.md`)를 읽고 **§동작 규칙 중 해당 번호**를
+   그대로 따르라는 지시.
+2. 사용자가 준 인자(없으면 "인자 없음 — 규칙 1").
+3. 작업 디렉터리(현재 저장소 경로).
+
+**서브에이전트의 반환 규격 — 완료 여부 한 줄만.** 프롬프트에 그대로 지시한다:
+> 마지막 응답은 아래 중 **정확히 한 줄**만 출력한다. 그 밖의 설명·명령 출력·diff·파일 목록·
+> 커밋 메시지·해시·통계·요약은 **절대 포함하지 않는다**.
+> - 성공: `완료`
+> - 실패: `실패: <한 줄 사유>`
+> - 사용자 확인이 필요해 중단: `확인필요: <한 줄>`
+
+메인 에이전트는 돌아온 그 한 줄을 사용자에게 그대로 전한다. 결과를 부풀리려고 `git log`·
+`git status` 등을 다시 돌려 상세를 캐지 않는다. `확인필요:` 가 오면 그때만 메인에서
+`AskUserQuestion` 으로 사용자에게 묻고, 답을 받아 같은 방식으로 서브에이전트를 다시 띄운다.
+
+**위임하지 않고 메인에서 직접 처리하는 예외**:
+- 규칙 0 (`help`) — 출력만 하면 되므로 서브에이전트 불필요.
+- 규칙 3 (`revert`) 의 사용자 확인, 그리고 **공통 규칙**의 원격 미설정 확인 —
+  `AskUserQuestion` 은 메인에서만 한다. 확인 후 실제 실행은 다시 서브에이전트에 위임한다.
+- 규칙 5 중 **조회성 서브커맨드**(`status`·`log`·`diff`·`show`·`branch` 등 저장소를 바꾸지 않고
+  출력 자체가 목적인 것) — 출력을 보여주는 게 요청이므로 메인에서 직접 실행해 결과를 보여준다.
+  상태를 바꾸는 서브커맨드는 위임한다.
+
 ## 공통 규칙: 원격(origin) 미설정 처리
 
 push / pull / public / private 등 **원격이 필요한 작업**을 하기 전에 `git remote -v`(또는 `git remote get-url origin`)로 origin 존재 여부를 먼저 확인한다. origin이 없으면 실패 메시지만 출력하고 끝내지 말고, `AskUserQuestion` 도구로 사용자에게 필요한 정보를 요청한다:
@@ -48,7 +88,7 @@ push / pull / public / private 등 **원격이 필요한 작업**을 하기 전�
 
 2. **인자가 `pull`인 경우**:
    - origin이 없으면 위 **공통 규칙**에 따라 처리 (원격을 새로 연결한 경우 pull 대신 첫 푸시가 맞는지 확인)
-   - `git pull`을 실행하고 결과를 보여줌
+   - `git pull`을 실행 (출력 확인은 서브에이전트 내부에서만, 반환은 `완료` / `실패: …` 한 줄)
 
 3. **인자가 `revert`인 경우** (미커밋 변경 전체 취소 — 파괴적):
    - 현재 상태 미리보기 출력:
@@ -62,7 +102,7 @@ push / pull / public / private 등 **원격이 필요한 작업**을 하기 전�
      - 옵션 2: **취소 + untracked 삭제** — `git reset --hard HEAD && git clean -fd` 실행. 신규 파일·디렉터리까지 모두 제거. (Recommended 아님 — 신규 작업물 손실 위험)
      - 옵션 3: **중단**
    - 옵션 1 또는 2 선택 시 실행, 옵션 3 선택 시 종료.
-   - 실행 후 `git status` 한 번 더 출력해 결과 확인.
+   - 실행 후 `git status` 로 결과를 확인(서브에이전트 내부 확인용, 사용자에게는 한 줄만 반환).
    - **주의**: `git stash` 와 달리 복구 경로 없음. 사용자가 선택한 옵션 외에는 추가 작업 금지.
 
 4. **인자가 `public` 또는 `private`인 경우** (원격 저장소 공개여부 전환):
@@ -77,8 +117,8 @@ push / pull / public / private 등 **원격이 필요한 작업**을 하기 전�
    - 가시성 변경 실행:
      - public 으로 전환: `gh repo edit <OWNER/REPO> --visibility public --accept-visibility-change-consequences`
      - private 으로 전환: `gh repo edit <OWNER/REPO> --visibility private --accept-visibility-change-consequences`
-   - 결과 확인: `gh repo view <OWNER/REPO> --json nameWithOwner,visibility,url` 출력으로 전환 후 상태 표시
-   - 실패(권한 부족·소유 아님 등) 시 gh 에러 메시지를 그대로 보여주고 종료
+   - 결과 확인: `gh repo view <OWNER/REPO> --json nameWithOwner,visibility` 로 전환 여부만 확인
+   - 실패(권한 부족·소유 아님 등) 시 `실패: <gh 에러 요지 한 줄>` 로 반환하고 종료
 
 5. **그 외 인자**:
    - 인자를 그대로 `git` 명령의 서브커맨드로 전달하여 실행 (예: `/git status` → `git status`)

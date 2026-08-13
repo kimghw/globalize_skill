@@ -41,14 +41,14 @@ if ([string]::IsNullOrEmpty($env:CRED_CONFIG)) { $ConfigFile = Join-Path $env:US
 else                                           { $ConfigFile = $env:CRED_CONFIG }
 # 전역 스킬 위치 (전역 복사본은 globalize 스킬이 동기화한다. 구버전 저장소 이전 경로 계산에만 사용)
 $GlobalSkillDir = Join-Path $env:USERPROFILE '.claude\skills\cred'
-# 프로필 저장소(vault): accredential 프로젝트의 스킬 폴더 안 profiles.
+# 프로필 저장소(vault): globalize_skill 프로젝트의 스킬 폴더 안 profiles.
 # 어느 사본(프로젝트/전역)으로 실행하든 항상 이 저장소 하나만 사용한다. CRED_STORE 환경변수로 재정의 가능.
 # 주의: 프로젝트 .gitignore에 이 폴더가 제외되어 있어야 한다 (스킬 폴더의 .gitignore로도 이중 방어).
-if ([string]::IsNullOrEmpty($env:CRED_STORE))  { $Store      = 'E:\dev\accredential\.claude\skills\cred\profiles' }
+if ([string]::IsNullOrEmpty($env:CRED_STORE))  { $Store      = 'E:\dev\globalize_skill\.claude\skills\cred\profiles' }
 else                                           { $Store      = $env:CRED_STORE }
 $BackupDir = Join-Path $Store '_backups'
 # 구버전 저장소 위치들 (발견되면 내용을 새 저장소로 자동 이전)
-$LegacyStores = @('E:\dev\accredential\profiles', (Join-Path $GlobalSkillDir 'profiles'))
+$LegacyStores = @('E:\dev\accredential\.claude\skills\cred\profiles', 'E:\dev\accredential\profiles', (Join-Path $GlobalSkillDir 'profiles'))
 
 if (-not (Test-Path $Store))     { New-Item -ItemType Directory -Path $Store -Force | Out-Null }
 if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null }
