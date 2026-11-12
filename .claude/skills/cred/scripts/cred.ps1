@@ -7,6 +7,10 @@
 #   use <이름>             프로필 → 활성 자격증명 (계정 전환, 구 import)
 #   export <이름> [폴더]   프로필 → 이동용 패키지(zip) 추출 (다른 PC로 가져가기)
 #   import <파일> [이름]   패키지(zip)/폴더/credentials 파일 → 프로필 등록 (add는 별칭)
+#   codex <액션> [인자...] Codex CLI 계정(~/.codex/auth.json) — 같은 폴더의 codex.ps1 로 그대로 전달
+#
+# 두 도구는 항상 따로 다룬다: Claude 액션은 .credentials.json 만, codex 액션은 auth.json 만 바꾼다.
+# 인자 없는 대화형 메뉴는 두 도구의 프로필을 [Claude Code]/[Codex] 그룹으로 보여주고 선택한 쪽만 전환한다.
 #
 # 프로필 구조:  <이름>\credentials.json - .credentials.json 사본 (토큰 포함, 계정 식별정보는 없음)
 #               <이름>\account.json     - 계정(로그인) 정보: 이메일/조직, 토큰 없음
@@ -19,7 +23,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'save', 'use', 'export', 'import', 'add', 'backup', 'setaccount', 'whoami', 'fixcache')]
+    [ValidateSet('list', 'save', 'use', 'export', 'import', 'add', 'backup', 'setaccount', 'whoami', 'fixcache', 'codex')]
     [string]$Action = '',
 
     [Parameter(Position = 1)]
@@ -27,6 +31,10 @@ param(
 
     [Parameter(Position = 2)]
     [string]$Name2,
+
+    # 'codex <액션> <인자...>' 전달용 나머지 인자
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Rest,
 
     [switch]$Force,
     [switch]$FromCache
@@ -351,43 +359,88 @@ function Sync-ActiveToProfile {
     Write-Output "자동 동기화: 현재 토큰(계정 $cachedEmail)을 프로필 '$syncName'에 저장했습니다 (이전 토큰은 _backups에 백업)."
 }
 
+# ---- Codex 연동: 같은 폴더의 codex.ps1 에 위임 (여기서 auth.json 을 직접 다루지 않는다) ----
+$CodexScript = Join-Path $PSScriptRoot 'codex.ps1'
+
+function Invoke-Codex([string[]]$CodexArgs) {
+    if (-not (Test-Path $CodexScript)) { throw "codex.ps1 을 찾을 수 없습니다: $CodexScript" }
+    $global:LASTEXITCODE = 0
+    & $CodexScript @CodexArgs -Force:$Force
+}
+
+# codex.ps1 의 기계용 상태 객체 (Current{Valid,Email,Meta} / Profiles[{Name,Active,Email,Meta}]). 없거나 실패하면 $null.
+function Get-CodexStatus {
+    if (-not (Test-Path $CodexScript)) { return $null }
+    try { return (& $CodexScript _status) } catch { return $null }
+}
+
+if ($Action -eq 'codex') {
+    $fwd = @()
+    foreach ($a in @(@($Name, $Name2) + @($Rest))) { if (-not [string]::IsNullOrEmpty($a)) { $fwd += $a } }
+    Invoke-Codex $fwd
+    exit $LASTEXITCODE
+}
+
 Invoke-StoreMigration
 
-# 인자 없이 실행: 프로필 목록을 번호 메뉴로 보여주고 선택한 계정으로 전환한다 (대화형).
+# 인자 없이 실행: 두 도구(Claude Code · Codex)의 프로필을 그룹별 번호 메뉴로 보여주고, 선택한 항목의 도구만 전환한다 (대화형).
 if ([string]::IsNullOrEmpty($Action)) {
-    $menuProfiles = @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
-                      Where-Object { $_.Name -notlike '_*' })
-    if ($menuProfiles.Count -eq 0) {
-        Write-Output "저장된 프로필이 없습니다. 'save <이름>'으로 현재 계정을 먼저 저장하세요."
-        exit 0
-    }
+    $menu = @()   # @{ Tool; Name; Active; Email; Meta }
     $menuActiveHash = $null
     if ((Test-Path $CredFile) -and (Test-CredStructure $CredFile)) { $menuActiveHash = Get-Sha $CredFile }
-    Write-Output "전환할 계정을 선택하세요:"
-    for ($i = 0; $i -lt $menuProfiles.Count; $i++) {
-        $pname = $menuProfiles[$i].Name
+    foreach ($p in @(Get-ChildItem $Store -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -notlike '_*' })) {
+        $pname = $p.Name
         $credPath = Get-ProfileCredPath $pname
-        $mark = '  '
-        if ($menuActiveHash -and (Test-Path $credPath) -and (Get-Sha $credPath) -eq $menuActiveHash) { $mark = '* ' }
+        $isActive = [bool]($menuActiveHash -and (Test-Path $credPath) -and (Get-Sha $credPath) -eq $menuActiveHash)
         $side = Read-Sidecar $pname
         $email = '(계정 미기록)'
         if ($null -ne $side -and $side.email) { $email = $side.email }
         if ((Test-Path $credPath) -and (Test-CredStructure $credPath)) { $meta = Get-CredMeta $credPath }
         else                                                           { $meta = '(토큰 없음/형식 오류)' }
-        Write-Output ("  {0}) {1}{2}  {3}  -  {4}" -f ($i + 1), $mark, $pname, $email, $meta)
+        $menu += @{ Tool = 'claude'; Name = $pname; Active = $isActive; Email = $email; Meta = $meta }
+    }
+    $codexStatus = Get-CodexStatus
+    if ($null -ne $codexStatus) {
+        foreach ($it in @($codexStatus.Profiles)) {
+            if ($null -eq $it) { continue }
+            $menu += @{ Tool = 'codex'; Name = [string]$it.Name; Active = [bool]$it.Active; Email = [string]$it.Email; Meta = [string]$it.Meta }
+        }
+    }
+    if ($menu.Count -eq 0) {
+        Write-Output "저장된 프로필이 없습니다. 'save <이름>'(Claude Code) 또는 'codex save <이름>'(Codex)으로 현재 계정을 먼저 저장하세요."
+        exit 0
+    }
+    Write-Output "전환할 계정을 선택하세요 (선택한 도구의 계정만 바뀝니다):"
+    $lastTool = ''
+    for ($i = 0; $i -lt $menu.Count; $i++) {
+        $it = $menu[$i]
+        if ($it.Tool -ne $lastTool) {
+            if ($it.Tool -eq 'claude') { Write-Output "  [Claude Code]" } else { Write-Output "  [Codex]" }
+            $lastTool = $it.Tool
+        }
+        $mark = '  '
+        if ($it.Active) { $mark = '* ' }
+        Write-Output ("  {0}) {1}{2}  {3}  -  {4}" -f ($i + 1), $mark, $it.Name, $it.Email, $it.Meta)
     }
     Write-Output "  (* = 현재 활성 토큰과 동일)"
     try { $sel = Read-Host "번호 입력 (Enter=취소)" }
-    catch { throw "대화형 입력을 사용할 수 없는 환경입니다. 'cred.ps1 use <이름>'처럼 액션을 지정해 실행하세요." }
+    catch { throw "대화형 입력을 사용할 수 없는 환경입니다. 'cred.ps1 use <이름>' 또는 'cred.ps1 codex use <이름>'처럼 액션을 지정해 실행하세요." }
     if ([string]::IsNullOrWhiteSpace($sel)) { Write-Output "취소했습니다."; exit 0 }
     $selNum = 0
-    if (-not [int]::TryParse($sel.Trim(), [ref]$selNum) -or $selNum -lt 1 -or $selNum -gt $menuProfiles.Count) {
-        throw "1~$($menuProfiles.Count) 범위의 번호를 입력하세요: '$sel'"
+    if (-not [int]::TryParse($sel.Trim(), [ref]$selNum) -or $selNum -lt 1 -or $selNum -gt $menu.Count) {
+        throw "1~$($menu.Count) 범위의 번호를 입력하세요: '$sel'"
+    }
+    $chosen = $menu[$selNum - 1]
+    Write-Output ""
+    if ($chosen.Tool -eq 'codex') {
+        Write-Output "→ 'codex use $($chosen.Name)' 실행 (Claude Code 계정은 바뀌지 않습니다)"
+        Invoke-Codex @('use', $chosen.Name)
+        exit $LASTEXITCODE
     }
     $Action = 'use'
-    $Name = $menuProfiles[$selNum - 1].Name
-    Write-Output ""
-    Write-Output "→ 'use $Name' 실행"
+    $Name = $chosen.Name
+    Write-Output "→ 'use $Name' 실행 (Codex 계정은 바뀌지 않습니다)"
 }
 
 switch ($Action) {
@@ -461,6 +514,14 @@ switch ($Action) {
             Write-Output ""
             Write-Output "(* = 현재 활성 토큰과 동일)"
             if ($activeMismatch) { Write-Output $activeMismatch }
+        }
+        $cs = Get-CodexStatus
+        if ($null -ne $cs) {
+            $curTxt = '(없음 - 로그아웃 상태)'
+            if ($cs.Current.Valid) { $curTxt = "$($cs.Current.Email)  -  $($cs.Current.Meta)" }
+            Write-Output ""
+            Write-Output "[Codex] 현재 활성: $curTxt"
+            Write-Output "[Codex] 프로필 $(@($cs.Profiles | Where-Object { $null -ne $_ }).Count)개  (목록: 'codex list' / 전환: 'codex use <이름>' / 저장: 'codex save <이름>')"
         }
     }
 

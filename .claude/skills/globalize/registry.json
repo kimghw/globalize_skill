@@ -11,6 +11,15 @@
                                    ]
                    },
                    {
+                       "name":  "fable",
+                       "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\fable",
+                       "repo":  "https://github.com/kimghw/globalize_skill.git",
+                       "repoPath":  ".claude/skills/fable",
+                       "exclude":  [
+
+                                   ]
+                   },
+                   {
                        "name":  "git",
                        "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\git",
                        "repo":  "https://github.com/kimghw/globalize_skill.git",
@@ -26,6 +35,15 @@
                        "repoPath":  ".claude/skills/globalize",
                        "exclude":  [
 
+                                   ]
+                   },
+                   {
+                       "name":  "port_manager",
+                       "origin":  "E:\\dev\\globalize_skill\\.claude\\skills\\port_manager",
+                       "repo":  "https://github.com/kimghw/globalize_skill.git",
+                       "repoPath":  ".claude/skills/port_manager",
+                       "exclude":  [
+                                       "port_list.md"
                                    ]
                    }
                ]

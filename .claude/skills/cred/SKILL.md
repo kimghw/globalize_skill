@@ -1,28 +1,31 @@
 ---
 name: cred
-description: Claude Code 계정 자격증명(~/.claude/.credentials.json)을 프로필로 저장(save)하거나 교체(use)하여 계정을 전환하고, 프로필을 패키지로 추출(export)해 다른 PC로 옮겨 등록(import)한다. 계정 전환, credential 교체/백업/등록, 다른 PC로 계정 이전, 프로필 목록 확인 요청 시 사용.
-argument-hint: (없음: 대화형 번호 메뉴로 전환) | list | save <이름> | use <이름> | export <이름> [대상폴더] | import <파일|폴더> [이름] [-Force] | backup | setaccount <이름> <이메일|-FromCache> | whoami [이름] | fixcache [이름]
+description: Claude Code 계정 자격증명(~/.claude/.credentials.json)과 Codex CLI 계정 자격증명(~/.codex/auth.json)을 프로필로 저장(save)하거나 교체(use)하여 계정을 전환하고, 프로필을 패키지로 추출(export)해 다른 PC로 옮겨 등록(import)한다. 계정 전환, credential 교체/백업/등록, 다른 PC로 계정 이전, 프로필 목록 확인 요청 시 사용. codex/ChatGPT 계정 전환 요청도 이 스킬(codex 하위 명령)로 처리한다.
+argument-hint: (없음: 대화형 번호 메뉴로 전환) | list | save <이름> | use <이름> | export <이름> [대상폴더] | import <파일|폴더> [이름] [-Force] | backup | setaccount <이름> <이메일|-FromCache> | whoami [이름] | fixcache [이름] | codex [list|save <이름>|use <이름>|export <이름>|import <파일> [이름]|backup|whoami [이름]]
 ---
 
-# Claude 계정 자격증명 전환 (cred)
+# 계정 자격증명 전환 (cred) — Claude Code · Codex
 
-`~/.claude/.credentials.json`(Claude Code 로그인 토큰)을 프로필 단위로 관리한다.
+`/cred` 하나로 Claude Code(`~/.claude/.credentials.json`)와 Codex CLI(`~/.codex/auth.json`)의 로그인 토큰을 프로필 단위로 관리한다. **두 도구는 항상 따로 다룬다** — Claude 계정을 고르거나 등록하면 Claude 파일만, Codex 계정을 고르거나 등록하면 Codex 파일만 바뀐다(2026-09-23 사용자 요청 "클로드만 / codex만"). 한 번의 요청으로 두 도구를 함께 바꾸지 않는다.
 프로필 저장소는 `E:\dev\globalize_skill\.claude\skills\cred\profiles\` 이며, 이 스킬이 어디에 설치되어 있든(프로젝트 원본/전역 복사본) 항상 이 저장소 하나만 사용한다 (`CRED_STORE` 환경변수로 재정의 가능).
 전역 복사본(`~/.claude/skills/cred/`)은 globalize 스킬이 관리한다 — 원본 수정 후에는 `/globalize update cred`로 동기화한다.
 
-모든 실제 작업은 이 스킬 폴더의 `scripts/cred.ps1` 스크립트가 수행한다. credentials 파일을 직접 읽거나 수정하지 말 것.
+모든 실제 작업은 이 스킬 폴더의 `scripts/cred.ps1` 스크립트가 수행한다(Codex 액션은 cred.ps1 이 같은 폴더의 `scripts/codex.ps1` 로 전달). credentials·auth 파일을 직접 읽거나 수정하지 말 것.
+
+Codex 의 저장소는 같은 profiles 폴더 아래 `_codex\` 이다(아래 "Codex 계정 전환" 절). 이 문서의 액션 표·사이드카 설명은 Claude 기준이며, codex 는 그 절에 적은 차이만 다르다.
 
 ## 실행 방법
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴더>\scripts\cred.ps1" <action> [인자...]
+powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴더>\scripts\cred.ps1" <action> [인자...]          # Claude Code
+powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴더>\scripts\cred.ps1" codex <action> [인자...]    # Codex (codex.ps1 로 전달)
 ```
 
 액션 이름의 기준은 **프로필 저장소**다: 저장소에 들여오면 import, 저장소에서 밖으로 꺼내면 export.
 
 | 사용자 요청 | action |
 |---|---|
-| (사용자가 터미널에서 직접 실행, 인자 없음) | 프로필 목록을 번호 메뉴로 보여주고 선택한 계정으로 `use` 전환하는 대화형 모드. 비대화형 환경(Claude Code의 PowerShell 도구 등)에서는 번호 입력이 불가능해 오류가 나므로, **스킬이 실행할 때는 반드시 액션을 지정**하고 선택은 AskUserQuestion으로 받는다 (아래 "전환 흐름"). |
+| (사용자가 터미널에서 직접 실행, 인자 없음) | 두 도구의 프로필을 `[Claude Code]`/`[Codex]` 그룹으로 나눈 번호 메뉴를 보여주고, 선택한 항목의 도구만 `use` 전환하는 대화형 모드. 비대화형 환경(Claude Code의 PowerShell 도구 등)에서는 번호 입력이 불가능해 오류가 나므로, **스킬이 실행할 때는 반드시 액션을 지정**하고 선택은 AskUserQuestion으로 받는다 (아래 "전환 흐름"). |
 | 프로필 목록 / 현재 어떤 계정인지 확인 | `list` |
 | 현재 로그인 상태를 프로필로 저장/갱신 | `save <이름>` (기존 프로필이 있으면 이전 토큰을 `_backups`에 백업한 뒤 바로 덮어씀) |
 | 특정 프로필로 계정 교체(전환) | `use <이름>` |
@@ -44,25 +47,58 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴
   - 사이드카에는 `source`가 기록된다: `cache`(로그인 캐시 사본) / `api`(fixcache로 API 확인) / `manual`(이메일만 수동 기록). `cache`와 `api`는 use 시 화면 표시 복원에 사용되고, `manual`은 목록 표시용이다.
   - `fixcache <이름>`은 그 프로필 토큰의 실제 계정(UUID/이메일/조직)을 조회 API로 확인해 사이드카를 생성한다 — **로그인 없이** 계정 정보를 만들 수 있는 유일한 방법. 이름 없이 `fixcache`만 실행하면 현재 활성 토큰을 확인해 화면 표시 계정만 교정한다(프로필 사이드카는 만들지 않음). 대상 토큰이 현재 활성 토큰과 같으면 `~/.claude.json`의 화면 표시 계정도 함께 교정한다 (수정 전 원본 자동 백업). 화면 표시 계정이 실제 토큰과 어긋났을 때(`list`가 `!!` 경고 표시) 이걸로 바로잡는다.
 
-## 전환 흐름 (스킬 호출의 기본 동작)
+## 전환 흐름 (인자 없는 `/cred` · 계정 전환 요청의 기본 동작)
 
-사용자가 프로필 이름 없이 스킬을 호출하거나 계정 전환을 요청하면 반드시 다음 순서로 진행한다:
+사용자가 대상 없이 스킬을 호출하거나 계정 전환을 요청하면 반드시 다음 순서로 진행한다. **선택한 도구의 파일만 바뀐다** — Claude 를 고르면 codex 액션을 부르지 않고, Codex 를 고르면 Claude 의 `use` 를 부르지 않는다.
 
-1. `list`를 실행해 현재 활성 프로필(`*` 표시)과 나머지 프로필 목록을 파악한다.
-2. **AskUserQuestion 도구**로 어떤 계정으로 교체할지 묻는다. 사용자에게는 항상 **계정(이메일)을 기준으로** 보여준다 — 프로필 폴더 이름은 내부 식별자일 뿐이다:
-   - question에 현재 적용 중인 **계정 이메일**과 메타데이터를 명시한다. 예: `현재 user1@example.com 계정(프로필 'default', max/20x, refresh 만료 2026-08-19)이 적용되어 있습니다. 어떤 계정으로 교체할까요?`
-   - 현재 활성이 **아닌** 프로필들을 각각 선택지로 제시한다. **label은 계정 이메일**, description에 프로필 이름과 `list`가 출력한 나머지 메타데이터(구독 종류, 만료일)를 넣는다. 계정 정보가 없는 프로필은 label에 프로필 이름을 쓰되 "(계정 미확인)"을 붙이고, 선택되면 use 후 `fixcache`로 계정 확인을 권장한다.
-   - 마지막 선택지로 "전환하지 않음"을 넣는다.
-   - 현재 활성과 동일한 프로필은 선택지에 넣지 않는다 (교체해도 변화가 없으므로).
-3. 계정이 선택되면 해당 프로필 이름으로 `use <이름>`을 실행하고, 완료 후 Claude Code 재시작 안내를 한다. "전환하지 않음"이면 아무 변경도 하지 않는다.
+1. `list`(Claude)와 `codex list`(Codex)를 둘 다 실행해 도구별 현재 활성 계정(`*` 표시)과 프로필 목록을 파악한다.
+2. **AskUserQuestion 1 — 도구 선택.** 사용자가 도구를 이미 말했으면(예: "codex 계정 바꿔줘", "클로드 다른 계정으로") 이 단계를 건너뛴다. 선택지는 **"Claude Code"**(description: 현재 이메일·프로필 이름·구독 종류·만료일), **"Codex"**(description: 현재 이메일·플랜), **"전환하지 않음"**. 활성 외 프로필이 없어 전환할 대상이 없는 도구는 description 에 "전환 가능한 프로필 없음 — `save` 로 먼저 저장 필요"라고 적는다.
+3. **AskUserQuestion 2 — 그 도구의 계정 선택.** 사용자에게는 항상 **계정(이메일)을 기준으로** 보여준다 — 프로필 폴더 이름은 내부 식별자일 뿐이다:
+   - question 에 어느 도구인지와 현재 적용 중인 **계정 이메일**·메타데이터를 명시한다. 예: `Claude Code 에 현재 user1@example.com 계정(프로필 'default', max/20x, refresh 만료 2026-08-19)이 적용되어 있습니다. 어떤 계정으로 교체할까요?`
+   - 그 도구에서 현재 활성이 **아닌** 프로필들을 각각 선택지로 제시한다. **label은 계정 이메일**, description 에 프로필 이름과 `list` 가 출력한 나머지 메타데이터(구독 종류/플랜, 만료일)를 넣는다. 계정 정보가 없는 프로필은 label 에 프로필 이름을 쓰되 "(계정 미확인)"을 붙이고, 선택되면 use 후 Claude 는 `fixcache` 로 계정 확인을 권장한다. 선택지가 4개 제한을 넘으면 질문을 나눈다.
+   - 마지막 선택지로 "전환하지 않음"을 넣는다. 현재 활성과 동일한 프로필은 선택지에 넣지 않는다 (교체해도 변화가 없으므로). 다른 도구의 프로필을 섞어 넣지 않는다.
+4. 계정이 선택되면 **그 도구의 액션으로만** 실행한다 — Claude 는 `use <이름>`, Codex 는 `codex use <이름>` — 그리고 완료 후 그 도구의 재시작 안내를 한다(Claude: Claude Code 새 세션 / Codex: 실행 중인 codex 세션·앱 재시작). "전환하지 않음"이면 아무 변경도 하지 않는다.
 
-사용자가 처음부터 대상을 명시한 경우에는 질문 없이 바로 `use` 한다. 프로필 이름(예: "workspace로 바꿔줘", `/cred use workspace`)뿐 아니라 **계정 이메일로 지정한 경우**(예: "user1 계정으로 바꿔줘")도 마찬가지다 — `list`의 계정 정보로 해당 프로필을 찾아 use 하고, 일치하는 계정이 없거나 여럿이면 AskUserQuestion으로 확인한다.
+사용자가 처음부터 대상을 명시한 경우에는 질문 없이 바로 `use` 한다. 프로필 이름(예: "workspace로 바꿔줘", `/cred use workspace`)뿐 아니라 **계정 이메일로 지정한 경우**(예: "user1 계정으로 바꿔줘")도 마찬가지다 — 두 도구의 `list` 에서 그 계정을 찾아 **한 도구에서만** 일치하면 그 도구로 use 하고, 두 도구 모두에 같은 이메일이 있거나(Claude 와 ChatGPT 를 같은 메일로 쓰는 경우) 일치가 없거나 여럿이면 AskUserQuestion 으로 확인한다. 도구를 함께 말했으면 그 도구 안에서만 찾는다.
+
+### 등록·저장·이전 요청의 범위
+
+`save`·`import`·`export`·`backup`·`whoami` 도 같은 규칙이다: **사용자가 말한 도구 하나에만** 실행한다. 어느 도구인지 말하지 않았으면(예: "지금 계정 저장해줘", "이 파일 등록해줘") AskUserQuestion 으로 Claude Code / Codex 를 먼저 고르게 한다. 단 import 대상 파일이 어느 쪽인지 형식으로 분명하면(`credentials.json`·Claude 패키지 → Claude, `auth.json`·codex 패키지 → Codex) 묻지 않고 그 도구로 등록한다 — 스크립트도 반대쪽 파일을 넣으면 거부한다. 한쪽 요청을 다른 쪽에 미루어 실행하지 않는다.
 
 구버전 용어 주의: 예전에는 `export`가 "현재 계정 저장", `import`가 "계정 전환"이었다. 사용자가 옛 의미로 말하면(예: "export 해줘"가 저장 의도) 문맥으로 판단해 `save`/`use`로 안내·실행한다. 스크립트도 옛 용법을 감지하면 올바른 액션을 안내하는 오류를 낸다.
 
+## Codex 계정 전환 (codex)
+
+Codex CLI 의 로그인 토큰 `~/.codex/auth.json`(ChatGPT 계정)을 Claude 와 같은 프로필 체계로 관리한다. 스크립트는 `scripts/codex.ps1`, 저장소는 `profiles\_codex\<이름>\` (`auth.json` + `account.json` + 이메일 마커). cred.ps1 은 `_`로 시작하는 폴더를 프로필로 보지 않으므로 두 저장소가 섞이지 않고, gitignore·globalize 제외(`profiles`)도 그대로 적용된다.
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File "<이 SKILL.md가 있는 폴더>\scripts\cred.ps1" codex <action> [인자...]
+```
+
+(`scripts\codex.ps1 <action>` 직접 호출과 같다. cred.ps1 은 `codex` 뒤 인자를 그대로 넘기고 자기 파일은 건드리지 않는다.)
+
+**라우팅**: 사용자가 codex·ChatGPT·OpenAI 계정을 말하면 Codex 액션, Claude·클로드를 말하면 Claude 액션, 어느 쪽도 말하지 않은 `/cred` 는 위 "전환 흐름"의 도구 선택부터 시작한다. `/cred codex <action> ...` 는 codex.ps1 의 액션으로 그대로 전달한다 (`/cred codex` 만 오면 도구 선택을 건너뛰고 Codex 계정 선택으로).
+
+| 사용자 요청 | action |
+|---|---|
+| codex 프로필 목록 / 현재 codex 계정 확인 | `list` |
+| 현재 codex 로그인 상태를 프로필로 저장/갱신 | `save <이름>` |
+| 특정 프로필로 codex 계정 전환 | `use <이름>` |
+| 다른 PC 이전용 패키지 추출 / 등록 | `export <이름> [대상폴더]` / `import <파일\|폴더> [이름] [-Force]` (패키지 형식 `codex-cred-package/1`, Claude 패키지를 넣으면 거부) |
+| 현재 auth.json 백업 | `backup` |
+| 토큰의 계정(이메일·플랜) 확인 | `whoami [이름]` — 토큰(JWT) 로컬 해독, API 호출 없음 |
+
+Claude 와 다른 점:
+- 계정 식별 정보(이메일·플랜)가 토큰(id_token/access_token JWT) 안에 있어 `setaccount`·`fixcache` 가 없다. save·import 시 자동 해독해 `account.json` 에 기록하고(패키지에 든 account.json 은 참고용 — 항상 새 토큰에서 다시 해독), `use` 의 자동 동기화도 이 이메일로 대상 프로필을 찾는다.
+- 화면 표시 캐시(`~/.claude.json` 상당)가 없어 auth.json 교체만으로 전환이 끝난다.
+- API 키 모드(`OPENAI_API_KEY` 만 있는 auth.json)도 프로필로 저장·전환할 수 있으나 이메일이 없어 자동 동기화 대상이 되지 않는다.
+- 만료 표시는 refresh 토큰이 JWT 면 그 만료일, 아니면 access 토큰 만료일(약 10일 — 실행 시 자동 갱신되므로 지났어도 재로그인 확정은 아님)과 `last_refresh` 를 보인다.
+
+전환 흐름은 위 "전환 흐름" 절의 도구 선택 이후와 같다(**이메일 기준** 선택, 현재 활성 제외 + "전환하지 않음" → `codex use <이름>`). `use` 로 토큰이 실제로 바뀌면 반드시 안내한다: **"실행 중인 codex 세션(CLI · VS Code 확장 · Codex 앱)을 재시작해야 적용됩니다. `codex login status` 로 확인할 수 있습니다."** 전환 전에 Codex 앱·세션을 닫아 두면 실행 중 프로세스가 토큰을 갱신하면서 교체한 파일을 되돌리는 일을 막을 수 있다.
+
 ## 규칙 (반드시 지킬 것)
 
-1. **토큰 값을 절대 출력하지 않는다.** `.credentials.json`이나 프로필 토큰 파일(`<이름>\credentials.json`)을 Read/cat/type 하지 않는다. 항상 스크립트를 통해서만 다룬다. 스크립트가 보여주는 메타데이터(계정 이메일, 구독 종류, 만료일)만 사용자에게 전달한다. (`<이름>\account.json` 사이드카에는 토큰이 없지만, 역시 스크립트로만 다룬다.)
-2. `use`로 토큰이 실제로 교체된 경우에는 반드시 안내한다: **"적용하려면 Claude Code를 재시작(새 세션 시작)해야 합니다."** 현재 실행 중인 세션은 기존 토큰을 계속 사용할 수 있다. (이미 해당 프로필이 활성 상태였다면 스크립트가 재시작 안내를 출력하지 않으며 재시작도 필요 없다.)
+1. **토큰 값을 절대 출력하지 않는다.** `.credentials.json`·`~/.codex/auth.json`이나 프로필 토큰 파일(`<이름>\credentials.json`·`_codex\<이름>\auth.json`)을 Read/cat/type 하지 않는다. 항상 스크립트를 통해서만 다룬다. 스크립트가 보여주는 메타데이터(계정 이메일, 구독 종류, 만료일)만 사용자에게 전달한다. (`<이름>\account.json` 사이드카에는 토큰이 없지만, 역시 스크립트로만 다룬다.)
+2. `use`로 토큰이 실제로 교체된 경우에는 반드시 안내한다: **"적용하려면 Claude Code를 재시작(새 세션 시작)해야 합니다."** (codex 는 "실행 중인 codex 세션·앱 재시작".) 현재 실행 중인 세션은 기존 토큰을 계속 사용할 수 있다. (이미 해당 프로필이 활성 상태였다면 스크립트가 재시작 안내를 출력하지 않으며 재시작도 필요 없다.)
 3. 전환은 항상 위 "전환 흐름"을 따른다 — 이름이 지정되지 않았으면 AskUserQuestion으로 확인받은 뒤에만 `use` 한다. 확인 없이 임의로 계정을 교체하지 않는다.
 4. 저장소(`.claude\skills\cred\profiles\`)는 반드시 git에서 제외된 상태를 유지한다 (globalize_skill 프로젝트 루트 `.gitignore`의 `profiles/` 패턴 + 스킬 폴더 자체의 `.gitignore` 이중 방어). credentials 파일을 저장소 밖의 다른 위치로 복사하지 않으며, 저장소 밖에 흩어진 credentials 파일을 발견하면 `import`로 등록한 뒤 원본 삭제를 권장한다. 유일한 예외는 `export` 패키지(다른 PC 이전 목적)로, 이때는 전송 후 양쪽에서 패키지 파일을 삭제하도록 반드시 안내한다.
